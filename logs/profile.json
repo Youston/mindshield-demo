@@ -1,0 +1,23 @@
+{
+    "name": "",
+    "email": "",
+    "age": "",
+    "current_state": {
+        "stress_level": 5,
+        "sleep_quality": 5,
+        "mood": 5
+    },
+    "support_system": {
+        "therapist": false,
+        "support_group": false,
+        "family_support": false
+    },
+    "goals": "",
+    "challenges": "",
+    "preferences": {
+        "notifications": false,
+        "data_sharing": false,
+        "theme": "dark",
+        "language": "en"
+    }
+}

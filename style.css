@@ -1,0 +1,223 @@
+/* General App Styles */
+.stApp {
+    max-width: 100%;
+    padding: 1rem;
+}
+.main {
+    padding: 0;
+}
+.css-1d391kg { /* This is a Streamlit specific class, might need to be checked for stability */
+    padding: 1rem;
+}
+.stSidebar {
+    background-color: #f5f5f5;
+}
+
+/* Eisenhower Matrix Quadrant General (Original separate classes - can be combined or kept) */
+.matrix-urgent-important {
+    background-color: #ffcdd2;
+    padding: 1rem;
+    border-radius: 5px;
+    margin-bottom: 1rem;
+}
+.matrix-not-urgent-important {
+    background-color: #c8e6c9;
+    padding: 1rem;
+    border-radius: 5px;
+    margin-bottom: 1rem;
+}
+.matrix-urgent-not-important {
+    background-color: #fff9c4;
+    padding: 1rem;
+    border-radius: 5px;
+    margin-bottom: 1rem;
+}
+.matrix-not-urgent-not-important {
+    background-color: #bbdefb;
+    padding: 1rem;
+    border-radius: 5px;
+    margin-bottom: 1rem;
+}
+.matrix-header { /* This was a general class, used with Eisenhower */
+    font-weight: bold;
+    margin-bottom: 0.5rem;
+}
+
+/* Task Priority (if used standalone, otherwise might be part of matrix specific styling) */
+.task-priority-urgent {
+    color: red;
+}
+.task-priority-important {
+    color: orange;
+}
+.task-priority-normal {
+    color: green;
+}
+.task-priority-low {
+    color: blue;
+}
+
+/* Eisenhower Matrix Refined Grid Layout Styles */
+.matrix-container { /* Main container for the matrix display */
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin: 10px 0;
+}
+.matrix-label { /* Label like "Importance ↑ | Urgency →" */
+    text-align: center;
+    font-style: italic;
+    margin-bottom: 10px;
+    color: #555;
+}
+.matrix-task-form { /* Style for the task input form */
+    background-color: white;
+    padding: 20px;
+    border-radius: 10px;
+    border: 1px solid #ddd;
+    margin-bottom: 20px;
+}
+.matrix-content-wrapper { /* Wrapper for the 2x2 grid */
+    display: grid; 
+    grid-template-columns: repeat(2, 1fr); 
+    grid-template-rows: repeat(2, auto);    
+    gap: 20px; 
+    width: 100%;
+}
+.matrix-quadrant { /* Styling for each of the four quadrants */
+    border-radius: 10px;
+    border: 2px solid #ddd;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    min-height: 200px; 
+}
+.matrix-title { /* Title within each quadrant, e.g., "🔥 Do First" */
+    font-size: 1.3em;
+    font-weight: bold;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+    text-align: center;
+}
+.tasks-container { /* Container for tasks within a quadrant, enables scrolling */
+    flex-grow: 1;
+    overflow-y: auto; 
+    padding-right: 5px; /* For scrollbar space */
+}
+.task-item { /* Individual task item styling */
+    background-color: #fff;
+    border: 1px solid #eee;
+    border-radius: 5px;
+    padding: 10px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.task-item:last-child {
+    margin-bottom: 0;
+}
+/* Quadrant specific background/border colors (from render_eisenhower_matrix) */
+.do-first-quadrant { background-color: #ffebee; border-color: #ffcdd2; }
+.schedule-quadrant { background-color: #e8f5e9; border-color: #c8e6c9; }
+.delegate-quadrant { background-color: #fff3e0; border-color: #ffe0b2; }
+.delete-quadrant { background-color: #f5f5f5; border-color: #e0e0e0; } /* 'Eliminate' quadrant */
+
+
+/* Original Eisenhower Matrix CSS (pre-grid, if any specific parts are still needed or for reference) */
+/* .matrix-content was an old class, replaced by matrix-content-wrapper for grid */
+/* .matrix-row was for old flexbox layout, not needed for grid */
+/* .do-first, .schedule, .delegate, .delete were old specific quadrant classes used with grid-template-areas */
+/* Retaining for reference, but matrix-quadrant + specific background classes are primary now */
+.do-first { 
+    /* background-color: #ffebee; Already covered by .do-first-quadrant */
+    grid-column: 1; /* These were for a direct child of matrix-content */
+    grid-row: 1;    /* Now handled by st.columns and matrix-content-wrapper */
+    /* border-color: #ffcdd2; */
+}
+.schedule { 
+    /* background-color: #e8f5e9; */
+    grid-column: 2;
+    grid-row: 1;
+    /* border-color: #c8e6c9; */
+}
+.delegate { 
+    /* background-color: #fff3e0; */
+    grid-column: 1;
+    grid-row: 2;
+    /* border-color: #ffe0b2; */
+}
+.delete { /* This was old name for .delete-quadrant */
+    /* background-color: #f5f5f5; */
+    grid-column: 2;
+    grid-row: 2;
+    /* border-color: #e0e0e0; */
+}
+
+/* Exercise Tab Grid Styles */
+.exercise-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr); /* 3 columns */
+    gap: 15px; /* Gap between cards */
+    margin-bottom: 20px;
+    width: 100%;
+}
+.exercise-card {
+    background-color: #f9f9f9;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    border: 1px solid #e0e0e0;
+    height: 150px; /* Fixed height for cards */
+    display: flex;
+    flex-direction: column;
+    justify-content: center; /* Center content vertically */
+    align-items: center; /* Center content horizontally */
+}
+.exercise-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+}
+.exercise-icon {
+    font-size: 2.5em; /* Larger icon */
+    margin-bottom: 10px;
+}
+.exercise-name {
+    font-size: 1em;
+    font-weight: bold;
+    color: #333;
+}
+.hidden-button-container { /* Hides the actual Streamlit buttons for exercise cards */
+    display: none;
+}
+
+/* Box Breathing Animation Styles */
+@keyframes breathe {
+    0% { transform: scale(1); opacity: 0.3; }
+    25% { transform: scale(1.5); opacity: 1; }
+    50% { transform: scale(1.5); opacity: 1; }
+    75% { transform: scale(1); opacity: 0.3; }
+    100% { transform: scale(1); opacity: 0.3; }
+}
+.breath-circle {
+    width: 100px;
+    height: 100px;
+    background: #4CAF50;
+    border-radius: 50%;
+    margin: 20px auto; /* Center the circle */
+    animation: breathe 16s infinite;
+}
+
+/* Ensure this is the last style if it's a general override or very specific */
+/* .css-1d391kg is a Streamlit internal class name for the main content area. */
+/* It's generally better to target Streamlit elements with more stable custom classes if possible, */
+/* or use Streamlit's theming capabilities. However, if direct override is needed: */
+/* .css-1d391kg div[data-testid="stVerticalBlock"] > div[style*="gap: 0.5rem;"] { */
+/*    gap: 0rem !important; /* Example: Overriding a specific gap */
+/* } */
+
+/* Add any other CSS rules that were previously in app.py here */ 
