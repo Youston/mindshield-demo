@@ -1145,6 +1145,20 @@ def render_chat_tab():
                 # as tool responses are for the AI to consume, not to send back to itself.
                 messages_for_api = [m for m in st.session_state.messages if m["role"] != "tool"]
 
+                # 1) Start with the core system prompt that defines MindShield's persona
+                base_system_msg = st.session_state.messages[0] if st.session_state.messages and st.session_state.messages[0]["role"] == "system" else {"role": "system", "content": "You are MindShield."}
+
+                messages_for_api = [base_system_msg]
+
+                # 2) Inject up-to-date user profile as an additional system message so the AI can personalise replies
+                profile_context = get_profile_context()
+                if profile_context:
+                    messages_for_api.append({"role": "system", "content": profile_context})
+
+                # 3) Add the rest of the conversation (excluding tool replies)
+                for m in st.session_state.messages[1:]:
+                    if m["role"] != "tool":
+                        messages_for_api.append(m)
 
                 stream = client.chat.completions.create(
                     model="gpt-4o", 
@@ -1805,6 +1819,58 @@ def handle_exercise_logging(exercise: str, score: int, notes: str, mood_change: 
     except Exception as e:
         logger.error(f"Error logging exercise: {e}")
         st.error("Failed to log exercise. Please try again.")
+
+def get_profile_context():
+    """Generate a short summary of the logged-in user's profile for AI context."""
+    pdict = st.session_state.get("profile_data", {})
+    if not pdict.get("onboarding_completed"):
+        return ""  # Nothing yet
+
+    # Build key details; keep it concise to save tokens
+    summary_parts = []
+    nickname = pdict.get("name")
+    if nickname:
+        summary_parts.append(f"Nickname: {nickname}")
+
+    country = pdict.get("country")
+    if country:
+        summary_parts.append(f"Location: {country}")
+
+    main_reason = pdict.get("main_reason")
+    if main_reason:
+        summary_parts.append("Reasons for joining: " + ", ".join(main_reason))
+
+    best_outcome = pdict.get("best_outcome")
+    if best_outcome:
+        summary_parts.append(f"Goal: {best_outcome}")
+
+    support_mode = pdict.get("support_mode")
+    if support_mode:
+        summary_parts.append(f"Preferred support mode: {support_mode}")
+
+    helper_style = pdict.get("helper_style")
+    if helper_style is not None:
+        summary_parts.append(f"Helper style (1-gentle → 5-direct): {helper_style}")
+
+    therapy_langs = pdict.get("therapy_langs")
+    if therapy_langs:
+        summary_parts.append("Therapy language(s): " + ", ".join(therapy_langs))
+
+    # Any quick-screen scores – include total only to save space
+    if pdict.get("phq9_raw"):
+        try:
+            phq_total = sum(int(x[0]) for x in pdict["phq9_raw"])  # each choice starts with digit 0-3
+            summary_parts.append(f"PHQ-9 total: {phq_total}")
+        except Exception:
+            pass
+    if pdict.get("gad7_raw"):
+        try:
+            gad_total = sum(int(x[0]) for x in pdict["gad7_raw"])
+            summary_parts.append(f"GAD-7 total: {gad_total}")
+        except Exception:
+            pass
+
+    return "USER PROFILE → " + " | ".join(summary_parts)
 
 def main():
     """Main application function"""
