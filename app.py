@@ -1499,190 +1499,271 @@ def render_admin_tab():
             st.success(_("Settings saved successfully!"))
             # In a real application, we would save these settings to a database
 
+# ---------------- Add PHQ9_ITEMS and GAD7_ITEMS constants ----------------
+PHQ9_ITEMS = [
+    "Little interest or pleasure in doing things.",
+    "Feeling down, depressed, or hopeless.",
+    "Trouble falling or staying asleep, or sleeping too much.",
+    "Feeling tired or having little energy.",
+    "Poor appetite or overeating.",
+    "Feeling bad about yourself — or that you're a failure.",
+    "Trouble concentrating on things, e.g. reading or TV.",
+    "Moving / speaking slowly or being fidgety / restless.",
+    "Thoughts that you would be better off dead or hurting yourself."
+]
+
+GAD7_ITEMS = [
+    "Feeling nervous, anxious or on edge.",
+    "Not being able to stop or control worrying.",
+    "Worrying too much about different things.",
+    "Trouble relaxing.",
+    "Being so restless it is hard to sit still.",
+    "Becoming easily annoyed or irritable.",
+    "Feeling afraid something awful might happen."
+]
+# -------------------------------------------------------------------------
+
 def render_onboarding():
-    """Render the onboarding form for new users."""
+    """First-time (or profile) form – MindShield version."""
     st.header(_("Welcome to MindShield! 🌟"))
-    st.write(_("Let's get to know you better to personalize your experience."))
+    st.write(_("Answer a few questions so we can match the right tools or therapist."))
 
-    # Fetch country list
-    try:
-        countries = sorted([country.name for country in pycountry.countries])
-        default_country_index = 0
-        if st.session_state.profile_data.get("country") and st.session_state.profile_data["country"] in countries:
-            default_country_index = countries.index(st.session_state.profile_data["country"])
-    except Exception as e: # Fallback if pycountry fails
-        logger.error(f"Failed to load countries using pycountry: {e}. Using a fallback list.")
-        countries = ["United States", "Canada", "United Kingdom", "Australia", "Germany", "France", "India", "Other"] # Fallback
-        default_country_index = 0
-
+    # MVP Skip option ------------------------------------------------------
+    if st.button(_("Skip for now"), key="skip_onboarding"):
+        st.session_state.profile_data["onboarding_completed"] = True
+        st.session_state.profile_data["onboarding_date"] = datetime.now().isoformat()
+        st.session_state.active_tab = "AI Chat"
+        st.rerun()
 
     with st.form("onboarding_form"):
-        # Basic Information
-        st.subheader("👤 Basic Information")
-        name = st.text_input(
-            "What should we call you?",
-            value=st.session_state.profile_data.get("name", ""),
-            help="This is how we'll address you throughout the app"
+        # --- Section 0 · Consent & Language -------------------------------------------
+        st.subheader(_("🔏 Consent & Language"))
+        lang_col, consent_col = st.columns([1, 2])
+        with lang_col:
+            preferred_language = st.selectbox(
+                _("App language"),
+                CONFIG["SUPPORTED_LANGUAGES"],
+                format_func=lambda x: CONFIG["LANGUAGE_NAMES"][x],
+                index=CONFIG["SUPPORTED_LANGUAGES"].index(
+                    st.session_state.profile_data.get(
+                        "preferred_language", st.session_state.ui_lang
+                    )
+                ),
+            )
+        with consent_col:
+            adult_ok   = st.checkbox(_("I confirm I am 18 years or older"), value=False)
+            privacy_ok = st.checkbox(
+                _("I understand MindShield is **not** an emergency service "
+                  "and that data is stored locally for service improvement."),
+                value=False,
+            )
+
+        # --- Section 1 · What brings you here? ----------------------------------------
+        st.subheader(_("🎯 Main reason for joining"))
+        main_reason = st.multiselect(
+            _("Select up to three:"),
+            [
+                "Stress at work/studies", "General anxiety", "Panic attacks",
+                "Trouble sleeping", "Low mood", "Relationship tension", "Grief",
+                "Trauma flashbacks", "Building healthy habits", "Just exploring", "Other"
+            ],
+            max_selections=3,
+            default=st.session_state.profile_data.get("main_reason", []),
+        )
+        other_reason = ""
+        if "Other" in main_reason:
+            other_reason = st.text_input(_("Tell us more (optional)"))
+
+        best_outcome = st.text_input(
+            _("If everything went well, how would MindShield help you?"),
+            value=st.session_state.profile_data.get("best_outcome", ""),
         )
 
-        selected_country = st.selectbox(
-            "Country",
-            options=countries,
-            index=default_country_index, # Default to first country or saved one
-            help="Select your country of residence"
+        # --- Section 2 · Basic profile -----------------------------------------------
+        st.subheader(_("👤 About you"))
+        name = st.text_input(_("First name or nickname"),
+                             value=st.session_state.profile_data.get("name", ""))
+        col_a, col_b = st.columns(2)
+        with col_a:
+            country = st.text_input(  # keep simple; you can swap to pycountry list later
+                _("Country / Emirate"), value=st.session_state.profile_data.get("country", "")
+            )
+        with col_b:
+            dob = st.date_input(
+                _("Date of birth"),
+                value=pd.to_datetime(
+                    st.session_state.profile_data.get("dob", "1990-01-01")
+                ),
+            )
+
+        gender = st.selectbox(
+            _("Gender identity"),
+            ["Woman", "Man", "Non-binary", _("Prefer not to say")],
+            index=["Woman", "Man", "Non-binary", _("Prefer not to say")].index(
+                st.session_state.profile_data.get("gender", _("Prefer not to say"))
+            ),
+        )
+        relationship = st.selectbox(
+            _("Relationship status"),
+            ["Single", "In a relationship", "Married",
+             "Divorced/Widowed", _("Prefer not to say")],
+            index=0,
+        )
+        occupation = st.selectbox(
+            _("Occupation"),
+            ["Student", "Employed", "Self-employed",
+             "Job-seeker", "Homemaker", "Retired"],
+            index=0,
         )
 
-        preferred_language = st.selectbox(
-            "Preferred Language",
-            CONFIG["SUPPORTED_LANGUAGES"],
-            format_func=lambda x: CONFIG["LANGUAGE_NAMES"][x],
-            index=CONFIG["SUPPORTED_LANGUAGES"].index(st.session_state.profile_data.get("preferred_language", st.session_state.ui_lang))
+        # --- Section 3 · Language & Culture ------------------------------------------
+        st.subheader(_("🕌 Language & cultural match"))
+        therapy_langs = st.multiselect(
+            _("Preferred therapy language(s)"),
+            ["English", "العربية", "Hindi", "Urdu", "Other"],
+            default=st.session_state.profile_data.get("therapy_langs", []),
+        )
+        religion = st.selectbox(
+            _("Religious / cultural context you'd like respected"),
+            ["Islam", "Christianity", "Hinduism", "Buddhism",
+             "Secular / No preference", _("Prefer not to say")],
+            index=0,
         )
 
-        # Current State
-        st.subheader("🎯 Current State")
-        current_mood = st.slider(
-            "How are you feeling right now? (0 = very low, 10 = very positive)",
-            0, 10, st.session_state.profile_data.get("current_mood", 5),
-            help="This helps us understand your current emotional state"
+        # --- Section 4 · Past care & safety ------------------------------------------
+        st.subheader(_("🛟 Past care & current safety"))
+        had_therapy = st.radio(
+            _("Have you ever spoken to a mental-health professional before?"), ["No", "Yes"]
+        )
+        on_meds = st.radio(
+            _("Are you currently taking mental-health medication?"), ["No", "Yes"]
+        )
+        last_sh = st.selectbox(
+            _("Last time you had thoughts of harming yourself"),
+            ["Never", "> 12 mo", "3-12 mo", "1-3 mo", "2-4 wk", _("Past 2 wk")],
+        )
+        chronic_pain = st.text_input(
+            _("Any chronic medical condition or pain? (optional)")
         )
 
-        stress_level = st.slider(
-            "Current stress level (0 = very relaxed, 10 = very stressed)",
-            0, 10, st.session_state.profile_data.get("stress_level", 5),
-            help="This helps us gauge your stress level"
+        # --- Section 5 · Quick symptom check (PHQ-9 + GAD-7) -------------------------
+        st.subheader(_("📋 Symptom check – last 2 weeks"))
+        phq_scores = []
+        for q in PHQ9_ITEMS:
+            phq_scores.append(
+                st.selectbox(
+                    q, ["0 – Not at all", "1 – Several days",
+                        "2 – > Half the days", "3 – Nearly every day"],
+                    key=f"phq_{q}",
+                )
+            )
+        gad_scores = []
+        for q in GAD7_ITEMS:
+            gad_scores.append(
+                st.selectbox(
+                    q, ["0 – Not at all", "1 – Several days",
+                        "2 – > Half the days", "3 – Nearly every day"],
+                    key=f"gad_{q}",
+                )
+            )
+        daily_diff = st.selectbox(
+            _("Overall, how difficult have these problems made day-to-day life?"),
+            ["0 – Not difficult", "1 – Somewhat", "2 – Very", "3 – Extremely"],
         )
 
-        # Support System
-        st.subheader("🤝 Support System")
-        social_support = st.slider(
-            "How supported do you feel by friends/family? (0 = not at all, 10 = very supported)",
-            0, 10, st.session_state.profile_data.get("social_support", 5)
+        # --- Section 6 · Lifestyle snapshot -----------------------------------------
+        st.subheader(_("🏃 Lifestyle & wellbeing"))
+        col_l1, col_l2, col_l3 = st.columns(3)
+        with col_l1:
+            phys_health = st.selectbox(_("Physical health"), ["Good", "Fair", "Poor"])
+            sleep = st.selectbox(_("Sleep quality"), ["Good", "Fair", "Poor"])
+        with col_l2:
+            eating = st.selectbox(_("Eating habits"), ["Good", "Fair", "Poor"])
+            alcohol = st.selectbox(
+                _("Alcohol use"), ["Never", "Monthly or less", "Weekly", "Daily"]
+            )
+        with col_l3:
+            nicotine = st.selectbox(
+                _("Nicotine / vaping"), ["Never", "Occasionally", "Daily"]
+            )
+            exercise = st.selectbox(
+                _("Exercise per week"), ["None", "1-2 x", "3-4 x", "5+ x"]
+            )
+
+        # --- Section 7 · Preferences -------------------------------------------------
+        st.subheader(_("🎛️ Helper & tool preferences"))
+        support_mode = st.radio(
+            _("Preferred support mode (for now)"),
+            ["Self-help AI only", "AI + live therapist", _("Not sure yet")],
+        )
+        comms = st.selectbox(
+            _("If live sessions, how do you prefer to communicate?"),
+            ["Messaging", "Audio", "Video", _("No preference")],
+        )
+        helper_style = st.slider(
+            _("Helper style – Gentle ⟷ Direct"), 1, 5, 3
+        )
+        tool_interest = st.multiselect(
+            _("Which tools interest you right now?"),
+            ["Guided breathing", "Mood / habit tracking", "Psy-ed videos",
+             "Therapist booking", "Peer support circles", "Journaling prompts", "None"],
         )
 
-        has_therapist_options = ["Yes", "No", "Prefer not to say"]
-        default_therapist_index = 0
-        if st.session_state.profile_data.get("has_therapist") in has_therapist_options:
-            default_therapist_index = has_therapist_options.index(st.session_state.profile_data.get("has_therapist"))
-
-        has_therapist = st.radio(
-            "Are you currently working with a mental health professional?",
-            has_therapist_options,
-            index=default_therapist_index
+        # --- Section 8 · Marketing (optional) ---------------------------------------
+        st.subheader(_("📣 How did you hear about us? (optional)"))
+        source = st.selectbox(
+            _("Source"), ["Friend / family", "Instagram", "TikTok",
+                          "Google", "Radio", "Podcast", "Other"],
+        )
+        special_flags = st.multiselect(
+            _("Tick any that apply (discounts)"),
+            ["University student", "First-responder / military",
+             "Person of determination", "Low income"],
         )
 
-        # Goals and Challenges
-        st.subheader("🎯 Goals & Challenges")
-        all_goals_options = [
-            "Reducing Anxiety", "Managing Stress", "Improving Sleep",
-            "Better Organization", "Work-Life Balance", "Building Resilience",
-            "Processing Emotions", "Setting Boundaries", "Other"
-        ]
-        goals = st.multiselect(
-            "What would you like to work on? (Select all that apply)",
-            all_goals_options,
-            default=st.session_state.profile_data.get("goals", [])
+        # --- SUBMIT -----------------------------------------------------------------
+        submitted = st.form_submit_button(
+            _("Start My Journey") if not st.session_state.profile_data.get(
+                "onboarding_completed") else _("Update profile")
         )
-
-        if "Other" in goals:
-            other_goals = st.text_input("Please specify other goals:", value=st.session_state.profile_data.get("other_goals_text", ""))
-        else:
-            other_goals = ""
-
-        all_challenges_options = [
-            "Work Stress", "Relationship Issues", "Health Concerns",
-            "Financial Stress", "Time Management", "Sleep Problems",
-            "Social Anxiety", "Overthinking", "Other"
-        ]
-        challenges = st.multiselect(
-            "What challenges are you currently facing? (Select all that apply)",
-            all_challenges_options,
-            default=st.session_state.profile_data.get("challenges", [])
-        )
-
-        if "Other" in challenges:
-            other_challenges = st.text_input("Please specify other challenges:", value=st.session_state.profile_data.get("other_challenges_text", ""))
-        else:
-            other_challenges = ""
-
-        # Preferences
-        st.subheader("⚙️ Preferences")
-        
-        saved_reminder_time_str = st.session_state.profile_data.get("reminder_time", "20:00")
-        try:
-            h, m = map(int, saved_reminder_time_str.split(':'))
-            default_reminder_time = dt_time_constructor(h, m)
-        except ValueError:
-            default_reminder_time = dt_time_constructor(20,0) # Fallback
-
-        reminder_time = st.time_input(
-            _("What's your preferred time for daily check-ins?"),
-            value=default_reminder_time
-        )
-
-        session_duration = st.slider(
-            "How long would you like your typical mindfulness sessions to be? (minutes)",
-            5, 60, st.session_state.profile_data.get("session_duration", 15)
-        )
-
-        # Submit button
-        submit_label = _("Update My Profile") if st.session_state.profile_data.get("onboarding_completed", False) else _("Start My Journey")
-        submitted = st.form_submit_button(submit_label, use_container_width=True)
 
         if submitted:
-            if not name:
-                st.error("Please enter your name to continue.")
-                return
+            if not (adult_ok and privacy_ok):
+                st.error(_("Please confirm age & privacy to continue."))
+                st.stop()
 
-            # Save to session state
-            st.session_state.profile_data["name"] = name
-            st.session_state.profile_data["country"] = selected_country
-            st.session_state.profile_data["preferred_language"] = preferred_language
-            st.session_state.profile_data["current_mood"] = current_mood
-            st.session_state.profile_data["stress_level"] = stress_level
-            st.session_state.profile_data["social_support"] = social_support
-            st.session_state.profile_data["has_therapist"] = has_therapist
-            
-            # Handle goals
-            final_goals = [g for g in goals if g != "Other"]
-            if "Other" in goals and other_goals:
-                final_goals.append(other_goals)
-            st.session_state.profile_data["goals"] = final_goals
-            if "Other" in goals: # store the raw text for pre-filling if "Other" is selected
-                 st.session_state.profile_data["other_goals_text"] = other_goals
-            elif "other_goals_text" in st.session_state.profile_data: # remove if "Other" deselected
-                del st.session_state.profile_data["other_goals_text"]
+            # Save everything ---------------------------------------------------------
+            pdict = st.session_state.profile_data
+            pdict.update({
+                "preferred_language": preferred_language,
+                "name": name, "country": country, "dob": str(dob),
+                "gender": gender, "relationship": relationship, "occupation": occupation,
+                "main_reason": [r for r in main_reason if r != "Other"] + (
+                    [other_reason] if other_reason else []
+                ),
+                "best_outcome": best_outcome,
+                "therapy_langs": therapy_langs, "religion": religion,
+                "had_therapy": had_therapy, "on_meds": on_meds,
+                "last_self_harm": last_sh, "chronic_pain": chronic_pain,
+                "phq9_raw": phq_scores, "gad7_raw": gad_scores,
+                "daily_diff": daily_diff,
+                "phys_health": phys_health, "sleep": sleep, "eating": eating,
+                "alcohol": alcohol, "nicotine": nicotine, "exercise": exercise,
+                "support_mode": support_mode, "comms": comms,
+                "helper_style": helper_style, "tool_interest": tool_interest,
+                "source": source, "special_flags": special_flags,
+                "onboarding_completed": True,
+                "onboarding_date": datetime.now().isoformat(),
+            })
 
-            # Handle challenges
-            final_challenges = [c for c in challenges if c != "Other"]
-            if "Other" in challenges and other_challenges:
-                final_challenges.append(other_challenges)
-            st.session_state.profile_data["challenges"] = final_challenges
-            if "Other" in challenges: # store the raw text for pre-filling
-                 st.session_state.profile_data["other_challenges_text"] = other_challenges
-            elif "other_challenges_text" in st.session_state.profile_data: # remove if "Other" deselected
-                del st.session_state.profile_data["other_challenges_text"]
+            # switch UI language immediately
+            st.session_state.ui_lang = preferred_language
+            st.session_state.gettext_translations = LANGUAGES.get(
+                preferred_language, LANGUAGES["en"]
+            )
 
-            st.session_state.profile_data["reminder_time"] = reminder_time.strftime("%H:%M") if reminder_time else "20:00"
-            st.session_state.profile_data["session_duration"] = session_duration
-            
-            if not st.session_state.profile_data.get("onboarding_completed", False):
-                 st.session_state.profile_data["onboarding_completed"] = True
-                 st.session_state.profile_data["onboarding_date"] = datetime.now().isoformat()
-
-
-            # Update language if different from current
-            if preferred_language != st.session_state.ui_lang:
-                st.session_state.ui_lang = preferred_language
-                st.session_state.gettext_translations = LANGUAGES.get(preferred_language, LANGUAGES["en"]) # Update translations
-            
-            st.success(_("Profile updated successfully!") if st.session_state.profile_data.get("onboarding_completed", False) else _("Onboarding complete! Welcome!"))
-            
-            # If it was the initial onboarding, redirect to AI Chat
-            # Otherwise, stay on the profile tab (or wherever this form was rendered)
-            if not st.session_state.active_tab == "Profile": # Check if we are NOT already on profile tab
-                 st.session_state.active_tab = "AI Chat"
-
+            st.success(_("Profile saved! Welcome aboard."))
+            st.session_state.active_tab = "AI Chat"
             st.rerun()
 
 def handle_exercise_logging(exercise: str, score: int, notes: str, mood_change: int = 0) -> None:
