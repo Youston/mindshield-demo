@@ -24,6 +24,7 @@ import pycountry
 import gettext
 from babel import Locale
 import re # Add re import for parsing AI responses
+import uuid
 
 # --- Utility Functions ---
 def get_locale_dir():
@@ -698,6 +699,9 @@ def initialize_session_state():
              st.session_state.profile_data["onboarding_completed"] = False
         if "country" not in st.session_state.profile_data: 
              st.session_state.profile_data["country"] = ""
+    # Unique session identifier for logging / retrieval
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
 
     if "messages" not in st.session_state:
         # Enhanced system prompt
@@ -1196,65 +1200,29 @@ def render_chat_tab():
             full_response = ""
             
             try:
-                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-                # Prepare messages for API, excluding any tool responses for the current turn
-                # as tool responses are for the AI to consume, not to send back to itself.
-                messages_for_api = [m for m in st.session_state.messages if m["role"] != "tool"]
+                user_msg = st.session_state.messages[-1]["content"]
+                history = [m for m in st.session_state.messages[:-1] if m["role"] in ("system", "assistant", "user")]
 
-                # 1) Start with the core system prompt that defines MindShield's persona
-                base_system_msg = st.session_state.messages[0] if st.session_state.messages and st.session_state.messages[0]["role"] == "system" else {"role": "system", "content": "You are MindShield."}
-
-                messages_for_api = [base_system_msg]
-
-                # 2) Inject up-to-date user profile as an additional system message so the AI can personalise replies
-                profile_context = get_profile_context()
-                if profile_context:
-                    messages_for_api.append({"role": "system", "content": profile_context})
-
-                # 3) Add the rest of the conversation (excluding tool replies)
-                for m in st.session_state.messages[1:]:
-                    if m["role"] != "tool":
-                        messages_for_api.append(m)
-
-                stream = client.chat.completions.create(
-                    model="gpt-4o", 
-                    messages=[
-                        {"role": m["role"], "content": m["content"]}
-                        for m in messages_for_api # Use filtered messages
-                    ],
-                    stream=True,
-                )
-                for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        full_response += chunk.choices[0].delta.content
-                        message_placeholder.markdown(full_response + "▌", unsafe_allow_html=True)
+                reply = CHAT_ENGINE.chat(st.session_state.session_id, history, user_msg)
+                full_response = reply
                 message_placeholder.markdown(full_response, unsafe_allow_html=True)
-                
+
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-                # After AI response, check if IT made an APP_REQUEST
+                # After AI response, check if it made an APP_REQUEST
                 app_request_match = re.search(app_request_regex, full_response)
-                
                 if app_request_match:
-                    command = app_request_match.group(1)    # LIST_FILES, READ_FILE, or SEARCH_FILES
-                    params_str = app_request_match.group(2) # The parameter string
-                    
+                    command = app_request_match.group(1)
+                    params_str = app_request_match.group(2)
                     logger.info(f"AI made an APP_REQUEST: Command='{command}', Params_str='{params_str}'")
                     application_response_content = handle_ai_file_operation(command, params_str)
-                    
-                    # Append the application's (tool's) response
                     st.session_state.messages.append({
                         "role": "tool",
-                        # tool_call_id is not strictly required by OpenAI's message format unless you use tool_calls object
-                        # Using a simple name for the tool, matching what AI might expect if it were a formal tool call
-                        "name": "file_system_tool", 
-                        "content": application_response_content
+                        "name": "file_system_tool",
+                        "content": application_response_content,
                     })
-                    st.rerun() # Rerun to process the new tool message and let AI respond to it
+                    st.rerun()
                 else:
-                    # If it's a regular AI message (potentially with a button), 
-                    # and not an app_request that already triggers a rerun,
-                    # let's try an explicit rerun here to help ensure buttons render promptly.
                     st.rerun()
 
             except Exception as e:
