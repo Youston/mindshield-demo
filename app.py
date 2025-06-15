@@ -24,13 +24,6 @@ import pycountry
 import gettext
 from babel import Locale
 import re # Add re import for parsing AI responses
-import uuid
-from mindshield_core.retrieval import WindowRetriever
-from mindshield_core.chat_engine import ChatEngine
-
-# Initialize retriever/chat engine once
-RETRIEVER = WindowRetriever(index=[])
-CHAT_ENGINE = ChatEngine(RETRIEVER)
 
 # --- Utility Functions ---
 def get_locale_dir():
@@ -856,15 +849,1142 @@ EXAMPLES  (do not include in normal replies)
   → AI: *follows Crisis & Risk Protocol above.*
 
 ─────────────────────────────────
-MINDSHIELD TIME-MANAGEMENT COACHING  •  EXTENDED FLOW
+FINAL REMINDERS
 ─────────────────────────────────
-1. **Initial Inventory** – ask in this order:  
-   • A list of current tasks with their deadlines (e.g., "buy groceries by tomorrow", "write report this weekend") or any regularly recurring duties.  
-   • A list of objectives the user hasn't yet achieved but wants to (e.g., "learn English", "watch a film with my partner").  
+• Empathy, clarity, and user safety come first.  
+• Offer buttons, slash-commands, or file requests only when they add clear value.  
+• Keep every response user-centred, actionable, culturally aware, and within these ethical bounds.""")
+        st.session_state.messages = [{"role": "system", "content": system_prompt_content}]
+        
+    if "active_tab" not in st.session_state:
+        st.session_state.active_tab = "Home"
+        
+    if "show_therapist_button" not in st.session_state:
+        st.session_state.show_therapist_button = False
+        
+    if "matrix_items" not in st.session_state:
+        st.session_state.matrix_items = {
+            'important_urgent': [],
+            'important_not_urgent': [],
+            'not_important_urgent': [],
+            'not_important_not_urgent': []
+        }
+        
+    if "active_exercise" not in st.session_state:
+        st.session_state.active_exercise = None
+        
+    # For "Discuss Exercise Content with AI" feature, initialize data stores if not present
+    if "grounding_items" not in st.session_state: 
+        st.session_state.grounding_items = {
+            "see": [], "feel": [], "hear": [], "smell": [], "taste": []
+        }
+    if "exposure_task" not in st.session_state: 
+        st.session_state.exposure_task = ""
+    if "exposure_steps" not in st.session_state: 
+        st.session_state.exposure_steps = []
+    if "stress_checkin_data_for_discussion" not in st.session_state: 
+        st.session_state.stress_checkin_data_for_discussion = {}
 
-2. **Choose an Approach** – offer two clear options:  
-   a. **Done-For-You Triage** – MindShield builds the Eisenhower Matrix for today and returns an action plan (utility mode).  
-   b. **Skill-Building Guidance** – coach the user step-by-step to organise their whole week (learning mode).  
+def handle_ai_suggested_action(action_code: str):
+    """Handles navigation or other actions suggested by the AI."""
+    logger.info(f"Handling AI suggested action: {action_code}")
+    if action_code == "action_navigate_eisenhower":
+        st.session_state.active_tab = "Exercises"
+        set_active_exercise(_("Eisenhower Matrix")) # Ensure this name matches EXERCISES_DATA key
+    elif action_code == "action_navigate_box_breathing":
+        st.session_state.active_tab = "Exercises"
+        set_active_exercise(_("Box Breathing"))
+    elif action_code == "action_navigate_grounding":
+        st.session_state.active_tab = "Exercises"
+        set_active_exercise(_("5-4-3-2-1 Grounding"))
+    elif action_code == "action_navigate_pmr":
+        st.session_state.active_tab = "Exercises"
+        set_active_exercise(_("Progressive Muscle Relaxation"))
+    elif action_code == "action_navigate_stress_checkin":
+        st.session_state.active_tab = "Exercises"
+        set_active_exercise(_("Likert Stress Check-in"))
+    elif action_code == "action_navigate_exposure_planner":
+        st.session_state.active_tab = "Exercises"
+        set_active_exercise(_("Graded Exposure Planner"))
+    elif action_code == "action_navigate_therapist_booking":
+        st.session_state.active_tab = "Therapist"
+    # Add more actions here if needed
+    else:
+        logger.warning(f"Unknown AI action code: {action_code}")
+        return # Do nothing if action code is unknown
 
-3. **Routine Mapping** – invite the user to sketch a "typical day" agenda (wake-up to bedtime).  
-""")
+    st.rerun()
+
+# --- AI File Operation Helper Functions ---
+MAX_FILE_READ_SIZE = 10000 # Max characters to read from a file for AI
+MAX_SEARCH_RESULTS_TOTAL_SIZE = 2000 # Max total characters for all search snippets
+MAX_SNIPPET_SIZE = 500 # Max characters for a single search snippet (search looks around keyword)
+
+def get_ai_accessible_path(folder_type: str, filename: Optional[str] = None) -> Optional[Path]:
+    """Returns the Path object for AI accessible folders/files, or None if invalid."""
+    base_path = None
+    if folder_type == "subjects":
+        base_path = DATA_LIBRARY_DIR / "subjects"
+        base_path.mkdir(parents=True, exist_ok=True) # Ensure it exists
+    elif folder_type == "feedback":
+        base_path = FEEDBACK_DIR
+    else:
+        logger.warning(f"Invalid folder_type specified for AI operation: {folder_type}")
+        return None
+
+    if filename:
+        # Sanitize filename to prevent path traversal
+        if ".." in filename or "/" in filename or "\\\\" in filename or filename.startswith(".") :
+            logger.warning(f"Potentially unsafe filename specified: {filename}")
+            return None
+        return base_path / Path(filename).name # Use Path(filename).name to further sanitize
+    return base_path
+
+def list_files_for_ai(folder_type: str) -> str:
+    logger.info(f"AI requested to list files in folder_type: {folder_type}")
+    path = get_ai_accessible_path(folder_type)
+    if not path or not path.is_dir():
+        return _("Application Error: Could not access the specified folder: {folder_type}.").format(folder_type=folder_type)
+    
+    try:
+        files = [f.name for f in path.iterdir() if f.is_file()]
+        if not files:
+            return _("No files found in the '{folder_type}' folder.").format(folder_type=folder_type)
+        return _("Files available in '{folder_type}':\\n - ").format(folder_type=folder_type) + "\\n - ".join(files)
+    except Exception as e:
+        logger.error(f"Error listing files for AI in {folder_type}: {e}")
+        return _("Application Error: Could not list files.")
+
+def read_file_for_ai(folder_type: str, filename: str) -> str:
+    logger.info(f"AI requested to read file: {filename} from folder_type: {folder_type}")
+    file_path = get_ai_accessible_path(folder_type, filename)
+    if not file_path or not file_path.is_file():
+        return _("Application Error: File '{filename}' not found or path is invalid in {folder_type}.").format(filename=filename, folder_type=folder_type)
+    
+    try:
+        content = file_path.read_text(encoding='utf-8', errors='replace')[:MAX_FILE_READ_SIZE]
+        return _("Content of '{filename}' (first {MAX_FILE_READ_SIZE} chars):\\n{content}").format(
+            filename=filename, MAX_FILE_READ_SIZE=MAX_FILE_READ_SIZE, content=content
+        )
+    except Exception as e:
+        logger.error(f"Error reading file {filename} for AI: {e}")
+        return _("Application Error: Could not read file '{filename}'.").format(filename=filename)
+
+def search_files_for_ai(folder_type: str, keywords_str: str) -> str:
+    logger.info(f"AI requested to search in {folder_type} for keywords: {keywords_str}")
+    base_path = get_ai_accessible_path(folder_type)
+    if not base_path or not base_path.is_dir():
+        return _("Application Error: Could not access the specified folder '{folder_type}' for search.").format(folder_type=folder_type)
+
+    keywords = [k.strip().lower() for k in keywords_str.split(',') if k.strip()]
+    if not keywords:
+        return _("Application Error: No keywords provided for search.")
+
+    found_snippets = []
+    total_chars_retrieved = 0
+
+    try:
+        for item in base_path.iterdir():
+            if item.is_file():
+                if total_chars_retrieved >= MAX_SEARCH_RESULTS_TOTAL_SIZE:
+                    found_snippets.append(_("... [Search results truncated due to size limit] ..."))
+                    break 
+                try:
+                    content = item.read_text(encoding='utf-8', errors='replace')
+                    content_lower = content.lower()
+                    for keyword in keywords:
+                        if total_chars_retrieved >= MAX_SEARCH_RESULTS_TOTAL_SIZE: break
+                        
+                        idx = content_lower.find(keyword)
+                        while idx != -1:
+                            if total_chars_retrieved >= MAX_SEARCH_RESULTS_TOTAL_SIZE: break
+                            
+                            # Calculate snippet boundaries
+                            half_snippet = (MAX_SNIPPET_SIZE - len(keyword)) // 2
+                            snippet_start = max(0, idx - half_snippet)
+                            snippet_end = min(len(content), idx + len(keyword) + half_snippet)
+                            snippet = content[snippet_start:snippet_end]
+
+                            # Add ellipsis if snippet is cut
+                            prefix = "..." if snippet_start > 0 else ""
+                            suffix = "..." if snippet_end < len(content) else ""
+                            
+                            formatted_snippet = f"{prefix}{snippet}{suffix}"
+
+                            if total_chars_retrieved + len(formatted_snippet) > MAX_SEARCH_RESULTS_TOTAL_SIZE and found_snippets:
+                                found_snippets.append(_("... [Search results truncated due to size limit] ..."))
+                                total_chars_retrieved = MAX_SEARCH_RESULTS_TOTAL_SIZE # Mark as full
+                                break 
+                            
+                            found_snippets.append(f"Found '{keyword}' in {item.name}: {formatted_snippet}")
+                            total_chars_retrieved += len(formatted_snippet)
+                            
+                            next_search_start = idx + len(keyword)
+                            if next_search_start >= len(content_lower): break
+                            idx = content_lower.find(keyword, next_search_start)
+                        if total_chars_retrieved >= MAX_SEARCH_RESULTS_TOTAL_SIZE: break 
+                except Exception as e:
+                    logger.warning(f"Could not read or search file {item.name} for AI: {e}")
+                    if total_chars_retrieved < MAX_SEARCH_RESULTS_TOTAL_SIZE:
+                         found_snippets.append(_("Application Error: Error processing file: {filename}").format(filename=item.name))
+                         total_chars_retrieved += len("Application Error: Error processing file: ")
+            if total_chars_retrieved >= MAX_SEARCH_RESULTS_TOTAL_SIZE: break
+
+        if not found_snippets:
+            return _("No results found for keywords: '{keywords_str}' in {folder_type}.").format(keywords_str=keywords_str, folder_type=folder_type)
+        
+        return _("Search results for '{keywords_str}' in {folder_type}:\\n\\n").format(keywords_str=keywords_str, folder_type=folder_type) + "\\n---\\n".join(found_snippets)
+
+    except Exception as e:
+        logger.error(f"Error searching files for AI in {folder_type} with keywords {keywords_str}: {e}")
+        return _("Application Error: Could not perform search.")
+
+def handle_ai_file_operation(command: str, params_str: str) -> str:
+    """Handles file operations requested by the AI by parsing params_str."""
+    logger.info(f"Handling AI file operation command: {command}, params_str: {params_str}")
+    
+    params = {}
+    folder_type_match = re.search(r'folder_type\s*=\s*"(subjects|feedback)"', params_str)
+    if folder_type_match:
+        params["folder_type"] = folder_type_match.group(1)
+    else:
+        return _("Application Error: 'folder_type' (subjects or feedback) missing or invalid in AI request.")
+
+    filename_match = re.search(r'filename\s*=\s*"([^"]*)"', params_str)
+    if filename_match:
+        params["filename"] = filename_match.group(1)
+
+    keywords_match = re.search(r'keywords\s*=\s*"([^"]*)"', params_str)
+    if keywords_match:
+        params["keywords"] = keywords_match.group(1)
+
+    folder_type = params.get("folder_type") # Already checked it's valid
+
+    if command == "LIST_FILES":
+        return list_files_for_ai(folder_type)
+    elif command == "READ_FILE":
+        filename = params.get("filename")
+        if not filename:
+            return _("Application Error: 'filename' missing for READ_FILE operation in AI request.")
+        return read_file_for_ai(folder_type, filename)
+    elif command == "SEARCH_FILES":
+        keywords = params.get("keywords")
+        if not keywords:
+            return _("Application Error: 'keywords' missing for SEARCH_FILES operation in AI request.")
+        return search_files_for_ai(folder_type, keywords)
+    else:
+        logger.warning(f"Unknown AI file operation command received: {command}")
+        return _("Application Error: Unknown AI file operation command.")
+# --- End AI File Operation Helper Functions ---
+
+def render_chat_tab():
+    st.header(_("💭 Chat with AI Assistant"))
+    
+    api_key = os.getenv('OPENAI_API_KEY')
+    logger.debug(f"OpenAI API Key status: {'Present' if api_key else 'Missing'}")
+    if not api_key:
+        st.error(_("OpenAI API Key is missing. Please check your .env file."))
+        return
+    
+    with st.sidebar:
+        is_trainer = st.checkbox(_("👩‍⚕️ Trainer Mode"), help=_("Enable this mode to correct AI responses"))
+    
+    button_regex = r"\[BUTTON: ([^:]+): ([a-zA-Z0-9_]+)\]"
+    app_request_regex = r"\[APP_REQUEST:\s*(LIST_FILES|READ_FILE|SEARCH_FILES)\s*(.*?)\]"
+
+    # Display chat messages
+    for message_idx, message in enumerate(st.session_state.messages):
+        if message["role"] == "system":
+            continue # Don't display system messages
+
+        with st.chat_message(message["role"]):
+            if message["role"] == "tool": # Handle tool responses specifically
+                st.markdown(f"**Application Response (File Operation):**\n```\n{message['content']}\n```")
+            else: # User or Assistant messages
+                content_parts = re.split(button_regex, message["content"])
+                # Example: "Text [BUTTON:L1:A1] More [BUTTON:L2:A2] End"
+                # re.split -> ['Text ', 'L1', 'A1', ' More ', 'L2', 'A2', ' End']
+                
+                part_processing_idx = 0
+                while part_processing_idx < len(content_parts):
+                    # Part 1: Text segment (always present, might be empty)
+                    text_segment = content_parts[part_processing_idx]
+                    if text_segment:
+                        st.markdown(text_segment, unsafe_allow_html=True)
+                    part_processing_idx += 1
+
+                    # Part 2 & 3: Button Label and Action Code (if they exist as a pair)
+                    if part_processing_idx < len(content_parts): # We have a potential label
+                        button_label = content_parts[part_processing_idx].strip()
+                        part_processing_idx += 1
+                        if part_processing_idx < len(content_parts): # We have an action code
+                            action_code = content_parts[part_processing_idx].strip()
+                            part_processing_idx += 1 # Consumed action code
+                            
+                            # Create the button
+                            button_key = f"ai_action_btn_{message_idx}_{action_code.replace(' ','_')}_{part_processing_idx}" # Unique key, sanitize action_code for key
+                            st.button(
+                                button_label,
+                                key=button_key,
+                                on_click=handle_ai_suggested_action,
+                                args=(action_code,)
+                            )
+                        else: 
+                            logger.warning(f"Orphaned button label found: '{button_label}' in message: {message['content']}")
+                            # If only label, display it as text to avoid losing it and prevent error.
+                            st.markdown(f"[Button label: {button_label}]", unsafe_allow_html=True)
+                    # Loop continues for the next text segment or end of parts
+
+            if is_trainer and message["role"] == "assistant":
+                with st.expander(_("✏️ Correct Response")):
+                    message_id = f"msg_{message_idx}" # Simpler ID
+                    corrected_response = st.text_area(
+                        _("Suggested correction:"),
+                        value=message["content"],
+                        key=f"correction_{message_id}"
+                    )
+                    if st.button(_("Save Correction"), key=f"save_{message_id}"):
+                        # ... (existing correction saving logic) ...
+                        correction_data = {
+                            "timestamp": datetime.now().isoformat(),
+                            "original": message["content"],
+                            "corrected": corrected_response
+                        }
+                        
+                        corrections_file = FEEDBACK_DIR / "corrections.csv"
+                        
+                        user_prompt_content = ""
+                        # Try to find the last user message for context
+                        if message_idx > 0 and st.session_state.messages[message_idx-1]["role"] == "user":
+                            user_prompt_content = st.session_state.messages[message_idx-1]["content"]
+                        elif len(st.session_state.messages) > 1 and st.session_state.messages[-2]["role"] == "user": # fallback
+                            user_prompt_content = st.session_state.messages[-2]["content"]
+
+
+                        if not corrections_file.exists():
+                            with open(corrections_file, 'w', newline='', encoding='utf-8') as f:
+                                writer = csv.writer(f)
+                                writer.writerow(["timestamp", "user_message", "original_ai_response", "corrected_ai_response"])
+
+                        with open(corrections_file, 'a', newline='', encoding='utf-8') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                correction_data["timestamp"],
+                                user_prompt_content,
+                                correction_data["original"],
+                                correction_data["corrected"]
+                            ])
+                        st.success(_("Correction saved successfully!"))
+
+
+    # Persistent container for therapist booking button
+    button_container = st.empty() 
+    if st.session_state.show_therapist_button:
+        if button_container.button(_("Yes, help me book a therapist"), key="book_therapist_chat_area"):
+            st.session_state.active_tab = "Therapist"
+            st.rerun()
+
+    # Chat input
+    if prompt := st.chat_input(_("Type your message here...")):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.rerun() # Rerun to display user message immediately
+
+    # If the last message is from user, generate AI response
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            full_response = ""
+            
+            try:
+                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                # Prepare messages for API, excluding any tool responses for the current turn
+                # as tool responses are for the AI to consume, not to send back to itself.
+                messages_for_api = [m for m in st.session_state.messages if m["role"] != "tool"]
+
+                # 1) Start with the core system prompt that defines MindShield's persona
+                base_system_msg = st.session_state.messages[0] if st.session_state.messages and st.session_state.messages[0]["role"] == "system" else {"role": "system", "content": "You are MindShield."}
+
+                messages_for_api = [base_system_msg]
+
+                # 2) Inject up-to-date user profile as an additional system message so the AI can personalise replies
+                profile_context = get_profile_context()
+                if profile_context:
+                    messages_for_api.append({"role": "system", "content": profile_context})
+
+                # 3) Add the rest of the conversation (excluding tool replies)
+                for m in st.session_state.messages[1:]:
+                    if m["role"] != "tool":
+                        messages_for_api.append(m)
+
+                stream = client.chat.completions.create(
+                    model="gpt-4o", 
+                    messages=[
+                        {"role": m["role"], "content": m["content"]}
+                        for m in messages_for_api # Use filtered messages
+                    ],
+                    stream=True,
+                )
+                for chunk in stream:
+                    if chunk.choices[0].delta.content is not None:
+                        full_response += chunk.choices[0].delta.content
+                        message_placeholder.markdown(full_response + "▌", unsafe_allow_html=True)
+                message_placeholder.markdown(full_response, unsafe_allow_html=True)
+                
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+                # After AI response, check if IT made an APP_REQUEST
+                app_request_match = re.search(app_request_regex, full_response)
+                
+                if app_request_match:
+                    command = app_request_match.group(1)    # LIST_FILES, READ_FILE, or SEARCH_FILES
+                    params_str = app_request_match.group(2) # The parameter string
+                    
+                    logger.info(f"AI made an APP_REQUEST: Command='{command}', Params_str='{params_str}'")
+                    application_response_content = handle_ai_file_operation(command, params_str)
+                    
+                    # Append the application's (tool's) response
+                    st.session_state.messages.append({
+                        "role": "tool",
+                        # tool_call_id is not strictly required by OpenAI's message format unless you use tool_calls object
+                        # Using a simple name for the tool, matching what AI might expect if it were a formal tool call
+                        "name": "file_system_tool", 
+                        "content": application_response_content
+                    })
+                    st.rerun() # Rerun to process the new tool message and let AI respond to it
+                else:
+                    # If it's a regular AI message (potentially with a button), 
+                    # and not an app_request that already triggers a rerun,
+                    # let's try an explicit rerun here to help ensure buttons render promptly.
+                    st.rerun()
+
+            except Exception as e:
+                logger.error(f"Error with OpenAI API or processing AI response: {e}")
+                st.error(_("Sorry, I encountered an error. Please try again."))
+                # Optionally add the error to messages for debugging if in a dev mode
+                # st.session_state.messages.append({"role": "system", "content": f"Error: {str(e)}"})
+                st.rerun() # Rerun to clear the streaming placeholder on error
+
+
+def render_exercise_tab():
+    """Render the exercises tab with interactive guided exercises."""
+    st.header(_("🧘 Guided Exercises"))
+    
+    # CSS for exercise buttons grid is now in style.css
+
+    # Exercises are now defined globally in EXERCISES_DATA
+    # No longer need: global EXERCISES_DATA
+    # No longer need: if EXERCISES_DATA is None: ...
+
+    active_exercise = st.session_state.get('active_exercise', None)
+
+    if not active_exercise:
+        st.subheader(_("Choose an Exercise"))
+
+        # Create three columns for the exercises
+        cols = st.columns(3)
+        col_idx = 0
+
+        for name, details in EXERCISES_DATA.items():
+            with cols[col_idx % 3]:
+                # Unique key for each button that simulates the card click
+                button_key = f"exercise_card_btn_{name.replace(' ', '_')}"
+                
+                # Create HTML for the card
+                card_html = f"""
+                <div class="exercise-card" onclick="document.getElementById('button-{button_key}').click();">
+                    <div class="exercise-icon">{details['icon']}</div>
+                    <div class="exercise-name">{name}</div>
+                </div>
+                """
+                st.markdown(card_html, unsafe_allow_html=True)
+                
+                # Hidden button that actually triggers the action
+                with st.container(): # Use st.container to apply custom class if needed, or just rely on CSS for button itself
+                    st.markdown('<div class="hidden-button-container">', unsafe_allow_html=True)
+                    if st.button(name, key=button_key, help=f"Start {name}"):
+                        set_active_exercise(name)
+                        st.rerun() # Rerun to update the UI immediately
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+            col_idx += 1
+        
+        # Add empty divs to fill grid if exercises are not a multiple of 3
+        while col_idx % 3 != 0:
+            with cols[col_idx % 3]:
+                st.markdown("<div style='height: 150px;'></div>", unsafe_allow_html=True) # Placeholder
+            col_idx += 1
+
+    else:
+        # Display the selected exercise
+        if active_exercise in EXERCISES_DATA:
+            if st.button(f"← {_('Back to Exercises')}"):
+                set_active_exercise(None)
+                st.rerun()
+            else:
+                st.subheader(active_exercise)
+                st.markdown(f"<p>{EXERCISES_DATA[active_exercise]['desc']}</p>", unsafe_allow_html=True)
+                if 'video_url' in EXERCISES_DATA[active_exercise]:
+                    st.video(EXERCISES_DATA[active_exercise]['video_url'])
+                EXERCISES_DATA[active_exercise]["func"]() # Call the rendering function for the exercise
+        else:
+            st.error(_("Selected exercise not found. Please choose another."))
+            set_active_exercise(None) # Reset if something went wrong
+            st.rerun()
+
+    # Expander for exercise details - keep this if it's useful
+    # with st.expander(_("Exercise Details"), expanded=False):
+    # st.markdown(_("Additional information and instructions for the exercises can be found here."))
+    # for name, details in EXERCISES_DATA.items():
+    # st.markdown(f"**{name}**: {details['desc']}")
+
+    st.markdown("---") # Existing separator
+
+    # Button to discuss exercise content
+    discuss_button_text = _("Discuss Exercise Content with AI")
+    base_prompt_message = _("I'd like to discuss an exercise.")
+    user_exercise_content = ""
+
+    if active_exercise and active_exercise in EXERCISES_DATA:
+        exercise_details = EXERCISES_DATA[active_exercise]
+        user_exercise_content = f"Exercise: {active_exercise}. Description: {exercise_details['desc']}"
+
+        if active_exercise == _("5-4-3-2-1 Grounding") and "grounding_items" in st.session_state:
+            grounding_data = "\n".join([f"- {sense.capitalize()}: {', '.join(items) if items else 'None yet'}" for sense, items in st.session_state.grounding_items.items()])
+            if grounding_data.strip(): # Check if there's actual grounding data
+                 user_exercise_content += f"\nMy current grounding items:\n{grounding_data}"
+        
+        elif active_exercise == _("Likert Stress Check-in"):
+            # Attempt to retrieve the last logged stress check-in for discussion
+            # This assumes handle_exercise_logging stores it somewhere accessible or we can reconstruct it
+            # For now, we'll just indicate the user is on this exercise.
+            # A more robust solution would be to fetch the last entry from a log/DB.
+            # For demonstration, let's check if form data is in session_state (if form isn't cleared post-submit)
+            if "stress_checkin_data_for_discussion" in st.session_state: # Assume this is populated on form submit
+                data = st.session_state.stress_checkin_data_for_discussion
+                user_exercise_content += f"\nMy last stress check-in details:\nLevel: {data.get('level', 'N/A')}\nSymptoms: {', '.join(data.get('symptoms', []))}\nTriggers: {', '.join(data.get('triggers', []))}\nCoping: {', '.join(data.get('coping', []))}\nNotes: {data.get('notes', 'N/A')}"
+            else:
+                user_exercise_content += "\nI am currently on the Stress Check-in. I might have some data to discuss."
+
+
+        elif active_exercise == _("Graded Exposure Planner") and "exposure_task" in st.session_state and "exposure_steps" in st.session_state:
+            task = st.session_state.exposure_task
+            steps = "\n".join([f"- {step['description']} (Anxiety: {step['anxiety_level']}/10)" for step in st.session_state.exposure_steps])
+            if task or steps:
+                user_exercise_content += f"\nMy exposure plan:\nTask: {task if task else 'Not defined'}\nSteps:\n{steps if steps else 'No steps defined'}"
+        
+        # If there is specific content, make a more pointed prompt
+        if user_exercise_content != f"Exercise: {active_exercise}. Description: {exercise_details['desc']}": # Check if more than just desc
+             final_prompt_message = _("I'd like to discuss the following from my '{ex_name}' exercise:\n{content_details}\nCan you help me with this?").format(ex_name=active_exercise, content_details=user_exercise_content)
+        else: # Default if only description is available
+            final_prompt_message = _("I'd like to discuss the '{ex_name}' exercise. Description: {ex_desc}. What are your thoughts or suggestions?").format(ex_name=active_exercise, ex_desc=exercise_details['desc'])
+
+    else: # No active exercise, or not in the list
+        final_prompt_message = base_prompt_message
+
+    if st.button(discuss_button_text, key="discuss_exercise_content"):
+        st.session_state.active_tab = "AI Chat"
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        st.session_state.messages.append({"role": "user", "content": final_prompt_message})
+        # No need to set st.session_state.chat_input, as render_chat_tab will process st.session_state.messages
+        st.rerun()
+
+# Helper function to set active exercise
+def set_active_exercise(name):
+    # If navigating away from Likert Stress Check-in, clear its specific discussion data
+    previous_exercise = st.session_state.get('active_exercise', None)
+    if name is None and previous_exercise == _("Likert Stress Check-in"):
+        if "stress_checkin_data_for_discussion" in st.session_state:
+            del st.session_state.stress_checkin_data_for_discussion
+            logger.debug("Cleared stress_checkin_data_for_discussion.")
+            
+    st.session_state.active_exercise = name
+
+def render_therapist_tab():
+    st.header(_("👩‍⚕️ Book Therapist Session"))
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader(_("Available Slots"))
+        date = st.date_input(_("Select Date"))
+        time_slot = st.selectbox(_("Select Time"), ["09:00", "10:00", "11:00", "14:00", "15:00"])
+        therapist = st.selectbox(_("Select Therapist"), ["Dr. Smith", "Dr. Johnson", "Dr. Williams"])
+        
+        if st.button(_("Book Session")):
+            st.success(_("Session booked successfully!"))
+    
+    with col2:
+        st.subheader(_("Upcoming Sessions"))
+        st.info(_("No upcoming sessions"))
+
+def render_profile_tab():
+    # st.header(_("👤 Profile Settings")) # Already handled by onboarding title if shown
+    render_onboarding() # Display the onboarding/profile form
+
+def render_admin_tab():
+    st.header(_("📊 Admin Panel"))
+    
+    # Create tabs within the admin panel for better organization
+    admin_tabs = st.tabs([_("Dashboard"), _("Knowledge Sources"), _("User Statistics"), _("System Settings")])
+    
+    with admin_tabs[0]:  # Dashboard
+        st.subheader(_("📈 MindShield Platform Dashboard"))
+        
+        # Show key metrics and stats
+        metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+        with metrics_col1:
+            st.metric(label=_("Total Users"), value="132", delta="5")
+        with metrics_col2:
+            st.metric(label=_("Active Sessions"), value="43", delta="2")
+        with metrics_col3:
+            st.metric(label=_("Weekly Engagement"), value="78%", delta="12%")
+        
+        # Usage over time (simulated data)
+        st.subheader(_("Platform Usage"))
+        usage_data = pd.DataFrame({
+            'Date': pd.date_range(start='2025-05-01', periods=14),
+            'Active Users': [45, 52, 48, 55, 62, 58, 65, 72, 68, 75, 70, 80, 85, 82],
+            'Sessions': [120, 135, 125, 140, 155, 145, 160, 175, 165, 180, 170, 190, 200, 195],
+            'Exercises': [85, 92, 88, 95, 102, 98, 105, 112, 108, 115, 110, 120, 125, 122]
+        })
+        usage_data = usage_data.set_index('Date')
+        st.line_chart(usage_data)
+        
+        # Popular features chart
+        st.subheader(_("Most Used Features"))
+        features = pd.DataFrame({
+            'Feature': ['AI Chat', 'Box Breathing', 'Eisenhower Matrix', 'Grounding', 'PMR', 'Therapist Booking'],
+            'Usage Count': [350, 210, 180, 160, 140, 120]
+        })
+        st.bar_chart(features.set_index('Feature'))
+        
+        # Recent activity log
+        st.subheader(_("Recent Activity"))
+        recent_data = [
+            {"Time": "Today 14:32", "User": "User123", "Activity": "Completed 5-4-3-2-1 Grounding exercise"},
+            {"Time": "Today 13:15", "User": "User456", "Activity": "Logged 30-min therapy session"},
+            {"Time": "Today 11:47", "User": "User789", "Activity": "Updated Eisenhower Matrix"},
+            {"Time": "Today 10:21", "User": "User234", "Activity": "Completed Box Breathing exercise"},
+            {"Time": "Today 09:05", "User": "User567", "Activity": "Scheduled therapist appointment"}
+        ]
+        st.dataframe(recent_data)
+    
+    with admin_tabs[1]:  # Knowledge Sources
+        st.subheader(_("📚 Upload Knowledge Source"))
+        
+        uploaded = st.file_uploader(_("Upload .pdf, .md, .txt"), type=["pdf", "md", "txt"])
+        if uploaded:
+            # Check file type using file extension
+            file_extension = Path(uploaded.name).suffix.lower()
+            
+            if file_extension == '.pdf':
+                with st.spinner("Processing PDF..."):
+                    handle_pdf_upload(uploaded)
+            else:
+                # Handle other file types as before
+                save_path = DATA_DIR / "data_library" / "subjects" / uploaded.name
+                with open(save_path, "wb") as f:
+                    f.write(uploaded.getbuffer())
+                st.success(f"{uploaded.name} saved.")
+        
+        if st.button(_("Reload Library")):
+            st.cache_data.clear()
+            st.success("Reloaded.")
+        
+        st.subheader(_("Current files"))
+        files_path = DATA_DIR / "data_library" / "subjects"
+        if files_path.exists():
+            for f in sorted(files_path.glob("*")):
+                if f.suffix != '.analysis.txt':  # Don't show analysis files
+                    st.text(f.name)
+                    if f.suffix == '.pdf':
+                        analysis_path = f.with_suffix('.analysis.txt')
+                        if analysis_path.exists():
+                            with st.expander("Show Analysis"):
+                                st.text(analysis_path.read_text())
+    
+    with admin_tabs[2]:  # User Statistics
+        st.subheader(_("👥 User Statistics"))
+        
+        # User growth chart
+        user_growth = pd.DataFrame({
+            'Month': ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
+            'New Users': [32, 45, 52, 68, 85],
+            'Total Users': [32, 77, 129, 197, 282]
+        })
+        st.subheader(_("User Growth"))
+        st.line_chart(user_growth.set_index('Month'))
+        
+        # User engagement distribution
+        st.subheader(_("User Engagement Distribution"))
+        engagement_data = pd.DataFrame({
+            'Engagement Level': ['High', 'Medium', 'Low', 'Inactive'],
+            'Percentage': [35, 42, 18, 5]
+        })
+        st.bar_chart(engagement_data.set_index('Engagement Level'))
+        
+        # Most active users
+        st.subheader(_("Most Active Users"))
+        active_users = [
+            {"User ID": "U12345", "Name": "Alex Chen", "Sessions": 48, "Exercises": 32},
+            {"User ID": "U23456", "Name": "Sam Taylor", "Sessions": 42, "Exercises": 38},
+            {"User ID": "U34567", "Name": "Jordan Lee", "Sessions": 39, "Exercises": 25},
+            {"User ID": "U45678", "Name": "Casey Kim", "Sessions": 35, "Exercises": 30},
+            {"User ID": "U56789", "Name": "Riley Smith", "Sessions": 34, "Exercises": 28}
+        ]
+        st.dataframe(active_users)
+        
+        # User feedback analysis
+        st.subheader(_("User Satisfaction"))
+        satisfaction = pd.DataFrame({
+            'Rating': ['5 stars', '4 stars', '3 stars', '2 stars', '1 star'],
+            'Percentage': [52, 38, 7, 2, 1]
+        })
+        st.bar_chart(satisfaction.set_index('Rating'))
+    
+    with admin_tabs[3]:  # System Settings
+        st.subheader(_("⚙️ System Settings"))
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.checkbox(_("Enable user registration"), value=True)
+            st.checkbox(_("Allow anonymous usage"), value=False)
+            st.checkbox(_("Enable email notifications"), value=True)
+            st.checkbox(_("Debug mode"), value=False)
+        
+        with col2:
+            st.number_input(_("Session timeout (minutes)"), min_value=5, max_value=120, value=30)
+            st.selectbox(_("Default language"), CONFIG["SUPPORTED_LANGUAGES"], 
+                        format_func=lambda x: CONFIG["LANGUAGE_NAMES"][x],
+                        index=CONFIG["SUPPORTED_LANGUAGES"].index(CONFIG["DEFAULT_LANGUAGE"]))
+            st.text_input(_("Support email"), value="support@mindshield.example.com")
+        
+        # API keys and integrations
+        st.subheader(_("API Integrations"))
+        openai_key = st.text_input(_("OpenAI API Key"), value="sk-*****", type="password")
+        calendar_key = st.text_input(_("Calendar API Key"), value="cal-*****", type="password")
+        
+        if st.button(_("Save Settings"), use_container_width=True):
+            st.success(_("Settings saved successfully!"))
+            # In a real application, we would save these settings to a database
+
+# ---------------- Add PHQ9_ITEMS and GAD7_ITEMS constants ----------------
+PHQ9_ITEMS = [
+    "Little interest or pleasure in doing things.",
+    "Feeling down, depressed, or hopeless.",
+    "Trouble falling or staying asleep, or sleeping too much.",
+    "Feeling tired or having little energy.",
+    "Poor appetite or overeating.",
+    "Feeling bad about yourself — or that you're a failure.",
+    "Trouble concentrating on things, e.g. reading or TV.",
+    "Moving / speaking slowly or being fidgety / restless.",
+    "Thoughts that you would be better off dead or hurting yourself."
+]
+
+GAD7_ITEMS = [
+    "Feeling nervous, anxious or on edge.",
+    "Not being able to stop or control worrying.",
+    "Worrying too much about different things.",
+    "Trouble relaxing.",
+    "Being so restless it is hard to sit still.",
+    "Becoming easily annoyed or irritable.",
+    "Feeling afraid something awful might happen."
+]
+# -------------------------------------------------------------------------
+
+def render_onboarding():
+    """First-time (or profile) form – MindShield version."""
+    st.header(_("Welcome to MindShield! 🌟"))
+    st.write(_("Answer a few questions so we can match the right tools or therapist."))
+
+    # MVP Skip option ------------------------------------------------------
+    if st.button(_("Skip for now"), key="skip_onboarding"):
+        st.session_state.profile_data["onboarding_completed"] = True
+        st.session_state.profile_data["onboarding_date"] = datetime.now().isoformat()
+        st.session_state.active_tab = "AI Chat"
+        st.rerun()
+
+    with st.form("onboarding_form"):
+        # --- Section 0 · Consent & Language -------------------------------------------
+        st.subheader(_("🔏 Consent & Language"))
+        lang_col, consent_col = st.columns([1, 2])
+        with lang_col:
+            preferred_language = st.selectbox(
+                _("App language"),
+                CONFIG["SUPPORTED_LANGUAGES"],
+                format_func=lambda x: CONFIG["LANGUAGE_NAMES"][x],
+                index=CONFIG["SUPPORTED_LANGUAGES"].index(
+                    st.session_state.profile_data.get(
+                        "preferred_language", st.session_state.ui_lang
+                    )
+                ),
+            )
+        with consent_col:
+            adult_ok   = st.checkbox(_("I confirm I am 18 years or older"), value=False)
+            privacy_ok = st.checkbox(
+                _("I understand MindShield is **not** an emergency service "
+                  "and that data is stored locally for service improvement."),
+                value=False,
+            )
+
+        # --- Section 1 · What brings you here? ----------------------------------------
+        st.subheader(_("🎯 Main reason for joining"))
+        main_reason = st.multiselect(
+            _("Select up to three:"),
+            [
+                "Stress at work/studies", "General anxiety", "Panic attacks",
+                "Trouble sleeping", "Low mood", "Relationship tension", "Grief",
+                "Trauma flashbacks", "Building healthy habits", "Just exploring", "Other"
+            ],
+            max_selections=3,
+            default=st.session_state.profile_data.get("main_reason", []),
+        )
+        other_reason = ""
+        if "Other" in main_reason:
+            other_reason = st.text_input(_("Tell us more (optional)"))
+
+        best_outcome = st.text_input(
+            _("If everything went well, how would MindShield help you?"),
+            value=st.session_state.profile_data.get("best_outcome", ""),
+        )
+
+        # --- Section 2 · Basic profile -----------------------------------------------
+        st.subheader(_("👤 About you"))
+        name = st.text_input(_("First name or nickname"),
+                             value=st.session_state.profile_data.get("name", ""))
+        col_a, col_b = st.columns(2)
+        with col_a:
+            country = st.text_input(  # keep simple; you can swap to pycountry list later
+                _("Country / Emirate"), value=st.session_state.profile_data.get("country", "")
+            )
+        with col_b:
+            dob = st.date_input(
+                _("Date of birth"),
+                value=pd.to_datetime(
+                    st.session_state.profile_data.get("dob", "1990-01-01")
+                ),
+            )
+
+        gender = st.selectbox(
+            _("Gender identity"),
+            ["Woman", "Man", "Non-binary", _("Prefer not to say")],
+            index=["Woman", "Man", "Non-binary", _("Prefer not to say")].index(
+                st.session_state.profile_data.get("gender", _("Prefer not to say"))
+            ),
+        )
+        relationship = st.selectbox(
+            _("Relationship status"),
+            ["Single", "In a relationship", "Married",
+             "Divorced/Widowed", _("Prefer not to say")],
+            index=0,
+        )
+        occupation = st.selectbox(
+            _("Occupation"),
+            ["Student", "Employed", "Self-employed",
+             "Job-seeker", "Homemaker", "Retired"],
+            index=0,
+        )
+
+        # --- Section 3 · Language & Culture ------------------------------------------
+        st.subheader(_("🕌 Language & cultural match"))
+        therapy_langs = st.multiselect(
+            _("Preferred therapy language(s)"),
+            ["English", "العربية", "Hindi", "Urdu", "Other"],
+            default=st.session_state.profile_data.get("therapy_langs", []),
+        )
+        religion = st.selectbox(
+            _("Religious / cultural context you'd like respected"),
+            ["Islam", "Christianity", "Hinduism", "Buddhism",
+             "Secular / No preference", _("Prefer not to say")],
+            index=0,
+        )
+
+        # --- Section 4 · Past care & safety ------------------------------------------
+        st.subheader(_("🛟 Past care & current safety"))
+        had_therapy = st.radio(
+            _("Have you ever spoken to a mental-health professional before?"), ["No", "Yes"]
+        )
+        on_meds = st.radio(
+            _("Are you currently taking mental-health medication?"), ["No", "Yes"]
+        )
+        last_sh = st.selectbox(
+            _("Last time you had thoughts of harming yourself"),
+            ["Never", "> 12 mo", "3-12 mo", "1-3 mo", "2-4 wk", _("Past 2 wk")],
+        )
+        chronic_pain = st.text_input(
+            _("Any chronic medical condition or pain? (optional)")
+        )
+
+        # --- Section 5 · Quick symptom check (PHQ-9 + GAD-7) -------------------------
+        st.subheader(_("📋 Symptom check – last 2 weeks"))
+        phq_scores = []
+        for q in PHQ9_ITEMS:
+            phq_scores.append(
+                st.selectbox(
+                    q, ["0 – Not at all", "1 – Several days",
+                        "2 – > Half the days", "3 – Nearly every day"],
+                    key=f"phq_{q}",
+                )
+            )
+        gad_scores = []
+        for q in GAD7_ITEMS:
+            gad_scores.append(
+                st.selectbox(
+                    q, ["0 – Not at all", "1 – Several days",
+                        "2 – > Half the days", "3 – Nearly every day"],
+                    key=f"gad_{q}",
+                )
+            )
+        daily_diff = st.selectbox(
+            _("Overall, how difficult have these problems made day-to-day life?"),
+            ["0 – Not difficult", "1 – Somewhat", "2 – Very", "3 – Extremely"],
+        )
+
+        # --- Section 6 · Lifestyle snapshot -----------------------------------------
+        st.subheader(_("🏃 Lifestyle & wellbeing"))
+        col_l1, col_l2, col_l3 = st.columns(3)
+        with col_l1:
+            phys_health = st.selectbox(_("Physical health"), ["Good", "Fair", "Poor"])
+            sleep = st.selectbox(_("Sleep quality"), ["Good", "Fair", "Poor"])
+        with col_l2:
+            eating = st.selectbox(_("Eating habits"), ["Good", "Fair", "Poor"])
+            alcohol = st.selectbox(
+                _("Alcohol use"), ["Never", "Monthly or less", "Weekly", "Daily"]
+            )
+        with col_l3:
+            nicotine = st.selectbox(
+                _("Nicotine / vaping"), ["Never", "Occasionally", "Daily"]
+            )
+            exercise = st.selectbox(
+                _("Exercise per week"), ["None", "1-2 x", "3-4 x", "5+ x"]
+            )
+
+        # --- Section 7 · Preferences -------------------------------------------------
+        st.subheader(_("🎛️ Helper & tool preferences"))
+        support_mode = st.radio(
+            _("Preferred support mode (for now)"),
+            ["Self-help AI only", "AI + live therapist", _("Not sure yet")],
+        )
+        comms = st.selectbox(
+            _("If live sessions, how do you prefer to communicate?"),
+            ["Messaging", "Audio", "Video", _("No preference")],
+        )
+        helper_style = st.slider(
+            _("Helper style – Gentle ⟷ Direct"), 1, 5, 3
+        )
+        tool_interest = st.multiselect(
+            _("Which tools interest you right now?"),
+            ["Guided breathing", "Mood / habit tracking", "Psy-ed videos",
+             "Therapist booking", "Peer support circles", "Journaling prompts", "None"],
+        )
+
+        # --- Section 8 · Marketing (optional) ---------------------------------------
+        st.subheader(_("📣 How did you hear about us? (optional)"))
+        source = st.selectbox(
+            _("Source"), ["Friend / family", "Instagram", "TikTok",
+                          "Google", "Radio", "Podcast", "Other"],
+        )
+        special_flags = st.multiselect(
+            _("Tick any that apply (discounts)"),
+            ["University student", "First-responder / military",
+             "Person of determination", "Low income"],
+        )
+
+        # --- SUBMIT -----------------------------------------------------------------
+        submitted = st.form_submit_button(
+            _("Start My Journey") if not st.session_state.profile_data.get(
+                "onboarding_completed") else _("Update profile")
+        )
+
+        if submitted:
+            if not (adult_ok and privacy_ok):
+                st.error(_("Please confirm age & privacy to continue."))
+                st.stop()
+
+            # Save everything ---------------------------------------------------------
+            pdict = st.session_state.profile_data
+            pdict.update({
+                "preferred_language": preferred_language,
+                "name": name, "country": country, "dob": str(dob),
+                "gender": gender, "relationship": relationship, "occupation": occupation,
+                "main_reason": [r for r in main_reason if r != "Other"] + (
+                    [other_reason] if other_reason else []
+                ),
+                "best_outcome": best_outcome,
+                "therapy_langs": therapy_langs, "religion": religion,
+                "had_therapy": had_therapy, "on_meds": on_meds,
+                "last_self_harm": last_sh, "chronic_pain": chronic_pain,
+                "phq9_raw": phq_scores, "gad7_raw": gad_scores,
+                "daily_diff": daily_diff,
+                "phys_health": phys_health, "sleep": sleep, "eating": eating,
+                "alcohol": alcohol, "nicotine": nicotine, "exercise": exercise,
+                "support_mode": support_mode, "comms": comms,
+                "helper_style": helper_style, "tool_interest": tool_interest,
+                "source": source, "special_flags": special_flags,
+                "onboarding_completed": True,
+                "onboarding_date": datetime.now().isoformat(),
+            })
+
+            # switch UI language immediately
+            st.session_state.ui_lang = preferred_language
+            st.session_state.gettext_translations = LANGUAGES.get(
+                preferred_language, LANGUAGES["en"]
+            )
+
+            st.success(_("Profile saved! Welcome aboard."))
+            st.session_state.active_tab = "AI Chat"
+            st.rerun()
+
+def handle_exercise_logging(exercise: str, score: int, notes: str, mood_change: int = 0) -> None:
+    """Handle exercise logging with error handling."""
+    try:
+        log_file = DATA_DIR / "logs" / "exercise_log.csv"
+        with open(log_file, "a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([
+                datetime.now().isoformat(),
+                exercise,
+                score,
+                mood_change,
+                notes
+            ])
+        
+        st.success("Exercise logged successfully! 🎯")
+        
+        # Show progress over time
+        if os.path.exists(log_file):
+            df = pd.read_csv(log_file, names=["Date", "Exercise", "Score", "Mood Change", "Notes"])
+            if len(df) > 1:
+                # Exercise effectiveness over time
+                st.subheader("Exercise Effectiveness")
+                st.line_chart(df.set_index("Date")["Score"])
+                st.caption("Your reported effectiveness scores over time")
+                
+                # Mood impact over time
+                if not df["Mood Change"].isna().all():
+                    st.subheader("Mood Impact")
+                    st.line_chart(df.set_index("Date")["Mood Change"])
+                    st.caption("How exercises affected your mood (-5 to +5)")
+                
+                # Exercise frequency
+                st.subheader("Exercise Frequency")
+                exercise_counts = df["Exercise"].value_counts()
+                st.bar_chart(exercise_counts)
+                st.caption("Number of times you've done each exercise")
+    
+    except Exception as e:
+        logger.error(f"Error logging exercise: {e}")
+        st.error("Failed to log exercise. Please try again.")
+
+def get_profile_context():
+    """Generate a short summary of the logged-in user's profile for AI context."""
+    pdict = st.session_state.get("profile_data", {})
+    if not pdict.get("onboarding_completed"):
+        return ""  # Nothing yet
+
+    # Build key details; keep it concise to save tokens
+    summary_parts = []
+    nickname = pdict.get("name")
+    if nickname:
+        summary_parts.append(f"Nickname: {nickname}")
+
+    country = pdict.get("country")
+    if country:
+        summary_parts.append(f"Location: {country}")
+
+    main_reason = pdict.get("main_reason")
+    if main_reason:
+        summary_parts.append("Reasons for joining: " + ", ".join(main_reason))
+
+    best_outcome = pdict.get("best_outcome")
+    if best_outcome:
+        summary_parts.append(f"Goal: {best_outcome}")
+
+    support_mode = pdict.get("support_mode")
+    if support_mode:
+        summary_parts.append(f"Preferred support mode: {support_mode}")
+
+    helper_style = pdict.get("helper_style")
+    if helper_style is not None:
+        summary_parts.append(f"Helper style (1-gentle → 5-direct): {helper_style}")
+
+    therapy_langs = pdict.get("therapy_langs")
+    if therapy_langs:
+        summary_parts.append("Therapy language(s): " + ", ".join(therapy_langs))
+
+    # Any quick-screen scores – include total only to save space
+    if pdict.get("phq9_raw"):
+        try:
+            phq_total = sum(int(x[0]) for x in pdict["phq9_raw"])  # each choice starts with digit 0-3
+            summary_parts.append(f"PHQ-9 total: {phq_total}")
+        except Exception:
+            pass
+    if pdict.get("gad7_raw"):
+        try:
+            gad_total = sum(int(x[0]) for x in pdict["gad7_raw"])
+            summary_parts.append(f"GAD-7 total: {gad_total}")
+        except Exception:
+            pass
+
+    return "USER PROFILE → " + " | ".join(summary_parts)
+
+def main():
+    """Main application function"""
+    load_css("style.css") # Load CSS
+    initialize_session_state() # Call initialization function
+    st.title(_("🛡️ MindShield"))
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("### 🌐 UI Language")
+        sel = st.selectbox(
+            "Select Language",
+            CONFIG["SUPPORTED_LANGUAGES"],
+            format_func=lambda x: CONFIG["LANGUAGE_NAMES"][x],
+            index=CONFIG["SUPPORTED_LANGUAGES"].index(st.session_state.ui_lang),
+            key="language_selector"
+        )
+        if sel != st.session_state.ui_lang:
+            st.session_state.ui_lang = sel
+            st.session_state.gettext_translations = LANGUAGES.get(sel, LANGUAGES["en"]) # Update translations
+            st.rerun() # Rerun to apply changes
+
+        # Navigation
+        st.markdown("---")
+        if st.session_state.profile_data.get("onboarding_completed", False):
+            tabs = [_("AI Chat"), _("Exercises"), _("Therapist Booking"), _("Profile"), _("Admin Panel")]
+            internal_tabs = ["AI Chat", "Exercises", "Therapist", "Profile", "Admin Panel"]
+        else:
+            tabs = [_("Home")]
+            internal_tabs = ["Home"]
+            
+        label_to_internal = dict(zip(tabs, internal_tabs))
+        
+        # Ensure active_tab is valid
+        if st.session_state.active_tab not in internal_tabs:
+            st.session_state.active_tab = internal_tabs[0]
+            
+        tab_choice_label = st.radio(
+            _("🧭 Navigate"), 
+            tabs, 
+            index=internal_tabs.index(st.session_state.active_tab),
+            key="navigation_tabs"
+        )
+        st.session_state.active_tab = label_to_internal[tab_choice_label]
+
+    # Main content area
+    if st.session_state.active_tab == "Home" or not st.session_state.profile_data.get("onboarding_completed", False):
+        render_onboarding()
+    elif st.session_state.active_tab == "AI Chat":
+        render_chat_tab()
+    elif st.session_state.active_tab == "Exercises":
+        render_exercise_tab()
+    elif st.session_state.active_tab == "Therapist":
+        render_therapist_tab()
+    elif st.session_state.active_tab == "Profile":
+        render_profile_tab()
+    elif st.session_state.active_tab == "Admin Panel":
+        render_admin_tab()
+
+if __name__ == "__main__":
+    main() 
