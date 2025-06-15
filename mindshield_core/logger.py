@@ -49,4 +49,14 @@ def log_turn(session_id: str, data: Dict[str, Any]) -> None:
     cleaned["timestamp_utc"] = dt.datetime.utcnow()
 
     with engine.begin() as conn:
-        conn.execute(insert(chat_logs).values(session_id=session_id, **cleaned)) 
+        conn.execute(insert(chat_logs).values(session_id=session_id, **cleaned))
+
+def fetch_recent_logs(limit: int = 100):
+    """Return recent chat logs as list of dicts."""
+    engine = _get_engine()
+    with engine.connect() as conn:
+        result = conn.execute(
+            chat_logs.select().order_by(chat_logs.c.timestamp_utc.desc()).limit(limit)
+        )
+        rows = [dict(r) for r in result]
+    return rows 

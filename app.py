@@ -1394,7 +1394,7 @@ def render_admin_tab():
     st.header(_("📊 Admin Panel"))
     
     # Create tabs within the admin panel for better organization
-    admin_tabs = st.tabs([_("Dashboard"), _("Knowledge Sources"), _("User Statistics"), _("System Settings")])
+    admin_tabs = st.tabs([_("Dashboard"), _("Knowledge Sources"), _("User Statistics"), _("System Settings"), _("Session Explorer"), _("Corrections Queue")])
     
     with admin_tabs[0]:  # Dashboard
         st.subheader(_("📈 MindShield Platform Dashboard"))
@@ -1536,6 +1536,32 @@ def render_admin_tab():
         if st.button(_("Save Settings"), use_container_width=True):
             st.success(_("Settings saved successfully!"))
             # In a real application, we would save these settings to a database
+
+    # ---------------- Session Explorer -------------------
+    with admin_tabs[4]:
+        st.subheader(_("🗂️ Recent Chat Sessions"))
+        try:
+            from mindshield_core.logger import fetch_recent_logs
+            logs = fetch_recent_logs(200)
+            if logs:
+                import pandas as pd
+                df = pd.DataFrame(logs)
+                st.dataframe(df)
+            else:
+                st.info(_("No logs found yet."))
+        except Exception as e:
+            st.error(_("Could not load logs: {err}").format(err=str(e)))
+
+    # ---------------- Corrections Queue ------------------
+    with admin_tabs[5]:
+        st.subheader(_("✏️ Corrections Queue"))
+        corrections_file = FEEDBACK_DIR / "corrections.csv"
+        if corrections_file.exists():
+            import pandas as pd
+            df = pd.read_csv(corrections_file)
+            st.dataframe(df)
+        else:
+            st.info(_("No corrections submitted yet."))
 
 # ---------------- Add PHQ9_ITEMS and GAD7_ITEMS constants ----------------
 PHQ9_ITEMS = [
