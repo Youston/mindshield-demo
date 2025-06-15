@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from .retrieval import WindowRetriever
 from .logger import log_turn
+from .modality import score_modalities, choose_modality
 
 kw_model = KeyBERT("all-MiniLM-L6-v2")
 
@@ -25,6 +26,8 @@ class ChatEngine:
     def chat(self, session_id: str, history: List[Dict[str, str]], user_msg: str) -> str:
         """Process a chat turn with retrieval and logging."""
         keywords = self._extract_keywords(user_msg)
+        modality_scores = score_modalities(user_msg)
+        chosen_modality = choose_modality(modality_scores)
         retrievals = self.retriever.retrieve(user_msg, keywords)
 
         evidence_blobs = "\n---\n".join([r["blob"] for r in retrievals])
@@ -47,8 +50,8 @@ class ChatEngine:
             {
                 "user_message": user_msg,
                 "keywords": keywords,
-                "modality_scores": {},
-                "chosen_modality": "",
+                "modality_scores": modality_scores,
+                "chosen_modality": chosen_modality,
                 "retrieval_meta": retrievals,
                 "llm_prompt": str(prompt_messages),
                 "llm_response": reply,
