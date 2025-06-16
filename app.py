@@ -1570,7 +1570,6 @@ def render_admin_tab():
             from mindshield_core.logger import fetch_recent_logs
             logs = fetch_recent_logs(200)
             if logs:
-                import pandas as pd
                 df = pd.DataFrame(logs)
                 st.dataframe(df)
             else:
@@ -1583,7 +1582,6 @@ def render_admin_tab():
         st.subheader(_("✏️ Corrections Queue"))
         corrections_file = FEEDBACK_DIR / "corrections.csv"
         if corrections_file.exists():
-            import pandas as pd
             df = pd.read_csv(corrections_file)
             st.dataframe(df)
         else:
