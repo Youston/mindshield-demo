@@ -2,14 +2,28 @@ from __future__ import annotations
 
 from typing import List, Dict, Any
 
-from keybert import KeyBERT
 from openai import OpenAI
 
 from .retrieval import WindowRetriever
 from .logger import log_turn
 from .modality import score_modalities, choose_modality
 
-kw_model = KeyBERT("all-MiniLM-L6-v2")
+# Delay heavy imports and model load until first use to keep memory low
+from functools import lru_cache
+
+# We intentionally avoid importing KeyBERT / torch at module import time because
+# Streamlit executes the script twice during startup and Render has a tight
+# memory limit.  The helper below loads a much smaller model the first time
+# keywords are requested and reuses it afterwards.
+
+@lru_cache(maxsize=1)
+def _get_kw_model():
+    """Return (and cache) a lightweight KeyBERT model instance."""
+    from keybert import KeyBERT  # import here to defer PyTorch / transformers
+
+    # The *paraphrase-MiniLM-L3-v2* model (~45 MB) is ~3× smaller than the
+    # earlier L6-v2 we used and still provides useful keyword extraction.
+    return KeyBERT("sentence-transformers/paraphrase-MiniLM-L3-v2")
 
 class ChatEngine:
     """Wraps LLM chat, keyword extraction, retrieval, and logging."""
@@ -20,7 +34,7 @@ class ChatEngine:
 
     # ------------------------------------------------------------------
     def _extract_keywords(self, text: str, top_k: int = 5) -> List[str]:
-        kws = kw_model.extract_keywords(text, keyphrase_ngram_range=(1,2), stop_words="english", top_n=top_k)
+        kws = _get_kw_model().extract_keywords(text, keyphrase_ngram_range=(1,2), stop_words="english", top_n=top_k)
         return [k[0] for k in kws]
 
     def chat(self, session_id: str, history: List[Dict[str, str]], user_msg: str) -> str:
