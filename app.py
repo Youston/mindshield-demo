@@ -26,6 +26,20 @@ from babel import Locale
 import re # Add re import for parsing AI responses
 import uuid
 
+# --- MindShield Retrieval & Chat Engine Setup (added) ---
+from mindshield_core.retrieval import WindowRetriever
+from mindshield_core.chat_engine import ChatEngine
+
+# Create a very small in-memory index so the retriever works even when
+# no knowledge sources have been uploaded yet. Each record only needs an
+# 'id' and 'text' field for WindowRetriever; keep it empty for now.
+_RETRIEVAL_INDEX: list = []  # Will be populated later from uploaded files.
+
+# Instantiate global retriever and chat engine once so they can be reused
+# across Streamlit reruns (they will be stored in st.session_state later if desired).
+RETRIEVER = WindowRetriever(_RETRIEVAL_INDEX)
+CHAT_ENGINE = ChatEngine(RETRIEVER)
+
 # --- Utility Functions ---
 def get_locale_dir():
     # This function now correctly points to 'locales' inside 'mindshield_streamlit'
@@ -1254,9 +1268,11 @@ def render_chat_tab():
             except Exception as e:
                 logger.error(f"Error with OpenAI API or processing AI response: {e}")
                 st.error(_("Sorry, I encountered an error. Please try again."))
-                # Optionally add the error to messages for debugging if in a dev mode
-                # st.session_state.messages.append({"role": "system", "content": f"Error: {str(e)}"})
-                st.rerun() # Rerun to clear the streaming placeholder on error
+                # Avoid triggering an immediate rerun on exception. This prevents the
+                # UI from entering a rapid flashing loop that makes it hard for the
+                # user to read the error message. The user can retry after reviewing
+                # the error.
+                # st.rerun()
 
 
 def render_exercise_tab():
