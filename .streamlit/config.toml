@@ -1,5 +1,7 @@
 [server]
 headless = true
-port = "$PORT"
 address = "0.0.0.0"
-enableCORS = false 
+# The port will be provided at runtime by Render via the $PORT env var in the
+# startup command. We intentionally omit 'port' here because Streamlit expects
+# an integer literal, not an env-var string.  Likewise we let enableCORS
+# default to 'true' which is compatible with default XSRF protection. 
