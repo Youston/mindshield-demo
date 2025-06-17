@@ -1121,34 +1121,71 @@ def handle_ai_file_operation(command: str, params_str: str) -> str:
         return _("Application Error: Unknown AI file operation command.")
 # --- End AI File Operation Helper Functions ---
 
+# --- Utility: tail log file for live display ---
+def _get_recent_logs(path: str = "logs/app.log", max_lines: int = 300) -> str:
+    """Return up to *max_lines* of the end of the given log file (safe)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()[-max_lines:]
+            return "".join(lines) if lines else "(log file is empty)"
+    except FileNotFoundError:
+        return "(log file not found)"
+    except Exception as e:
+        return f"(error reading log: {e})"
+
+# ------------------------------------------------------------------
+# CHAT TAB – now with side-by-side live logs
+# ------------------------------------------------------------------
+
 def render_chat_tab():
     st.header(_("💭 Chat with AI Assistant"))
-    
+
+    # Create two columns: 2/3 for chat, 1/3 for logs
+    col_chat, col_logs = st.columns([2, 1])
+
+    # ---------------- Left: Chat UI ----------------
+    with col_chat:
+        _render_chat_interface()
+
+    # ---------------- Right: Live Logs -------------
+    with col_logs:
+        st.subheader("🪵 Live Logs")
+        # Auto-refresh every 5 s while the user is on this tab
+        from streamlit_autorefresh import st_autorefresh  # lightweight dep (<5 kB)
+        st_autorefresh(interval=5000, key="log_autorefresh")
+        st.code(_get_recent_logs(), language="text")
+
+# ------------------------------------------------------------------
+# Original chat logic moved into helper to keep render_chat_tab tidy
+# ------------------------------------------------------------------
+
+def _render_chat_interface():
+    """All existing chat-handling code extracted here (verbatim)."""
     api_key = os.getenv('OPENAI_API_KEY')
     logger.debug(f"OpenAI API Key status: {'Present' if api_key else 'Missing'}")
     if not api_key:
         st.error(_("OpenAI API Key is missing. Please check your .env file."))
         return
-    
+
     with st.sidebar:
         is_trainer = st.checkbox(_("👩‍⚕️ Trainer Mode"), help=_("Enable this mode to correct AI responses"))
-    
+
     button_regex = r"\[BUTTON: ([^:]+): ([a-zA-Z0-9_]+)\]"
     app_request_regex = r"\[APP_REQUEST:\s*(LIST_FILES|READ_FILE|SEARCH_FILES)\s*(.*?)\]"
 
     # Display chat messages
     for message_idx, message in enumerate(st.session_state.messages):
         if message["role"] == "system":
-            continue # Don't display system messages
+            continue  # Don't display system messages
 
         with st.chat_message(message["role"]):
-            if message["role"] == "tool": # Handle tool responses specifically
+            if message["role"] == "tool":  # Handle tool responses specifically
                 st.markdown(f"**Application Response (File Operation):**\n```\n{message['content']}\n```")
-            else: # User or Assistant messages
+            else:  # User or Assistant messages
                 content_parts = re.split(button_regex, message["content"])
                 # Example: "Text [BUTTON:L1:A1] More [BUTTON:L2:A2] End"
                 # re.split -> ['Text ', 'L1', 'A1', ' More ', 'L2', 'A2', ' End']
-                
+
                 part_processing_idx = 0
                 while part_processing_idx < len(content_parts):
                     # Part 1: Text segment (always present, might be empty)
@@ -1158,71 +1195,83 @@ def render_chat_tab():
                     part_processing_idx += 1
 
                     # Part 2 & 3: Button Label and Action Code (if they exist as a pair)
-                    if part_processing_idx < len(content_parts): # We have a potential label
+                    if part_processing_idx < len(content_parts):  # We have a potential label
                         button_label = content_parts[part_processing_idx].strip()
                         part_processing_idx += 1
-                        if part_processing_idx < len(content_parts): # We have an action code
+                        if part_processing_idx < len(content_parts):  # We have an action code
                             action_code = content_parts[part_processing_idx].strip()
-                            part_processing_idx += 1 # Consumed action code
-                            
+                            part_processing_idx += 1  # Consumed action code
+
                             # Create the button
-                            button_key = f"ai_action_btn_{message_idx}_{action_code.replace(' ','_')}_{part_processing_idx}" # Unique key, sanitize action_code for key
+                            button_key = (
+                                f"ai_action_btn_{message_idx}_{action_code.replace(' ', '_')}_{part_processing_idx}"
+                            )  # Unique key, sanitize action_code for key
                             st.button(
                                 button_label,
                                 key=button_key,
                                 on_click=handle_ai_suggested_action,
-                                args=(action_code,)
+                                args=(action_code,),
                             )
-                        else: 
-                            logger.warning(f"Orphaned button label found: '{button_label}' in message: {message['content']}")
+                        else:
+                            logger.warning(
+                                f"Orphaned button label found: '{button_label}' in message: {message['content']}"
+                            )
                             # If only label, display it as text to avoid losing it and prevent error.
                             st.markdown(f"[Button label: {button_label}]", unsafe_allow_html=True)
-                    # Loop continues for the next text segment or end of parts
 
             if is_trainer and message["role"] == "assistant":
                 with st.expander(_("✏️ Correct Response")):
-                    message_id = f"msg_{message_idx}" # Simpler ID
+                    message_id = f"msg_{message_idx}"  # Simpler ID
                     corrected_response = st.text_area(
                         _("Suggested correction:"),
                         value=message["content"],
-                        key=f"correction_{message_id}"
+                        key=f"correction_{message_id}",
                     )
                     if st.button(_("Save Correction"), key=f"save_{message_id}"):
                         # ... (existing correction saving logic) ...
                         correction_data = {
                             "timestamp": datetime.now().isoformat(),
                             "original": message["content"],
-                            "corrected": corrected_response
+                            "corrected": corrected_response,
                         }
-                        
+
                         corrections_file = FEEDBACK_DIR / "corrections.csv"
-                        
+
                         user_prompt_content = ""
                         # Try to find the last user message for context
-                        if message_idx > 0 and st.session_state.messages[message_idx-1]["role"] == "user":
-                            user_prompt_content = st.session_state.messages[message_idx-1]["content"]
-                        elif len(st.session_state.messages) > 1 and st.session_state.messages[-2]["role"] == "user": # fallback
+                        if (
+                            message_idx > 0 and st.session_state.messages[message_idx - 1]["role"] == "user"
+                        ):
+                            user_prompt_content = st.session_state.messages[message_idx - 1]["content"]
+                        elif len(st.session_state.messages) > 1 and st.session_state.messages[-2]["role"] == "user":
                             user_prompt_content = st.session_state.messages[-2]["content"]
 
-
                         if not corrections_file.exists():
-                            with open(corrections_file, 'w', newline='', encoding='utf-8') as f:
+                            with open(corrections_file, "w", newline="", encoding="utf-8") as f:
                                 writer = csv.writer(f)
-                                writer.writerow(["timestamp", "user_message", "original_ai_response", "corrected_ai_response"])
+                                writer.writerow(
+                                    [
+                                        "timestamp",
+                                        "user_message",
+                                        "original_ai_response",
+                                        "corrected_ai_response",
+                                    ]
+                                )
 
-                        with open(corrections_file, 'a', newline='', encoding='utf-8') as f:
+                        with open(corrections_file, "a", newline="", encoding="utf-8") as f:
                             writer = csv.writer(f)
-                            writer.writerow([
-                                correction_data["timestamp"],
-                                user_prompt_content,
-                                correction_data["original"],
-                                correction_data["corrected"]
-                            ])
+                            writer.writerow(
+                                [
+                                    correction_data["timestamp"],
+                                    user_prompt_content,
+                                    correction_data["original"],
+                                    correction_data["corrected"],
+                                ]
+                            )
                         st.success(_("Correction saved successfully!"))
 
-
     # Persistent container for therapist booking button
-    button_container = st.empty() 
+    button_container = st.empty()
     if st.session_state.show_therapist_button:
         if button_container.button(_("Yes, help me book a therapist"), key="book_therapist_chat_area"):
             st.session_state.active_tab = "Therapist"
@@ -1231,14 +1280,14 @@ def render_chat_tab():
     # Chat input
     if prompt := st.chat_input(_("Type your message here...")):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        st.rerun() # Rerun to display user message immediately
+        st.rerun()  # Rerun to display user message immediately
 
     # If the last message is from user, generate AI response
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             full_response = ""
-            
+
             try:
                 user_msg = st.session_state.messages[-1]["content"]
                 history = [m for m in st.session_state.messages[:-1] if m["role"] in ("system", "assistant", "user")]
@@ -1256,11 +1305,13 @@ def render_chat_tab():
                     params_str = app_request_match.group(2)
                     logger.info(f"AI made an APP_REQUEST: Command='{command}', Params_str='{params_str}'")
                     application_response_content = handle_ai_file_operation(command, params_str)
-                    st.session_state.messages.append({
-                        "role": "tool",
-                        "name": "file_system_tool",
-                        "content": application_response_content,
-                    })
+                    st.session_state.messages.append(
+                        {
+                            "role": "tool",
+                            "name": "file_system_tool",
+                            "content": application_response_content,
+                        }
+                    )
                     st.rerun()
                 else:
                     st.rerun()
@@ -1268,12 +1319,7 @@ def render_chat_tab():
             except Exception as e:
                 logger.error(f"Error with OpenAI API or processing AI response: {e}")
                 st.error(_("Sorry, I encountered an error. Please try again."))
-                # Avoid triggering an immediate rerun on exception. This prevents the
-                # UI from entering a rapid flashing loop that makes it hard for the
-                # user to read the error message. The user can retry after reviewing
-                # the error.
-                # st.rerun()
-
+                # Avoid immediate rerun to prevent flicker
 
 def render_exercise_tab():
     """Render the exercises tab with interactive guided exercises."""
