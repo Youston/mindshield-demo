@@ -1151,8 +1151,11 @@ def render_chat_tab():
     with col_logs:
         st.subheader("🪵 Live Logs")
         # Auto-refresh every 5 s while the user is on this tab
-        from streamlit_autorefresh import st_autorefresh  # lightweight dep (<5 kB)
-        st_autorefresh(interval=5000, key="log_autorefresh")
+        try:
+            from streamlit_autorefresh import st_autorefresh  # optional
+            st_autorefresh(interval=5000, key="log_autorefresh")
+        except ModuleNotFoundError:
+            st.caption("(Install 'streamlit-autorefresh' for auto-updating logs)")
         st.code(_get_recent_logs(), language="text")
 
 # ------------------------------------------------------------------
