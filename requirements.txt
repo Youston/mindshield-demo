@@ -16,4 +16,5 @@ qdrant-client
 keybert
 sentence-transformers
 tiktoken
-sqlalchemy 
+sqlalchemy
+streamlit-autorefresh>=0.0.6 
