@@ -1292,8 +1292,23 @@ def _render_chat_interface():
                 user_msg = st.session_state.messages[-1]["content"]
                 history = [m for m in st.session_state.messages[:-1] if m["role"] in ("system", "assistant", "user")]
 
-                reply = CHAT_ENGINE.chat(st.session_state.session_id, history, user_msg)
-                full_response = reply
+                # Crisis detection: generate immediate safety response locally
+                if detect_critical_situation(user_msg):
+                    reply = (
+                        "I'm really sorry you're feeling like this. Your safety is the most important thing right now. "
+                        "If you feel you might act on these thoughts, please reach out for immediate help:\n\n"
+                        "• In the UAE: call 999 (police) or 998 (ambulance) for emergencies.\n"
+                        "• Call 800 HOPE (800 4673) 24/7 to talk to a trained listener.\n"
+                        "• If you're outside the UAE, please call your local emergency number or a trusted crisis line right away.\n\n"
+                        "If you can, consider talking with someone you trust nearby. You don't have to face this alone. "
+                        "I can also help you book a therapist session now if that feels helpful. "
+                        "[BUTTON: Book a Therapist Session: action_navigate_therapist_booking]"
+                    )
+                    # Make the therapist-booking suggestion button visible
+                    st.session_state.show_therapist_button = True
+                else:
+                    reply = CHAT_ENGINE.chat(st.session_state.session_id, history, user_msg)
+                    full_response = reply
                 message_placeholder.markdown(full_response, unsafe_allow_html=True)
 
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
